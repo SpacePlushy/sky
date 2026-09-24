@@ -1,0 +1,6 @@
+# Normalize text files to LF in the repository.
+* text=auto eol=lf
+
+# Vallado's upstream SGP4 source keeps its original bytes (CRLF, BOM) so it
+# can be compared exactly with the file in the CelesTrak package.
+src/Sky.Sgp4/SGP4Lib.cs -text

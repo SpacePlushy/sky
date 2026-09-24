@@ -13,4 +13,10 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Temporarily excluded: the verbatim upstream file references Windows Forms.
+         The next commit trims it to the propagation code and removes this line. -->
+    <Compile Remove="SGP4Lib.cs" />
+  </ItemGroup>
+
 </Project>
