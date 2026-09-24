@@ -11,12 +11,8 @@
     <AnalysisMode>None</AnalysisMode>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- CS8981: upstream type names such as elsetrec are all lowercase. Kept as-is. -->
+    <NoWarn>$(NoWarn);CS8981</NoWarn>
   </PropertyGroup>
-
-  <ItemGroup>
-    <!-- Temporarily excluded: the verbatim upstream file references Windows Forms.
-         The next commit trims it to the propagation code and removes this line. -->
-    <Compile Remove="SGP4Lib.cs" />
-  </ItemGroup>
 
 </Project>

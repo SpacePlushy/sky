@@ -38,4 +38,21 @@ header comment in `SGP4Lib.cs`, and the project README do that.
 
 ## Changes from upstream
 
-None yet. The file is currently excluded from compilation.
+The propagation math is unmodified. These are the only changes:
+
+1. **Added** a citation header comment at the top of the file, as the FAQ asks.
+2. **Removed** `using System.Drawing;` and `using System.Windows.Forms;`, which
+   are not available on .NET 10 outside Windows.
+3. **Removed** `twoline2rv`, the TLE reader. It parses numbers with the current
+   culture, so it fails on machines that use a comma as the decimal separator.
+   It also contains the interactive Windows Forms and console input paths. Sky
+   reads TLEs with its own culture-invariant parser in `Sky.Orbital`, which is
+   checked against Vallado's verification output.
+4. **Removed** the utility routines `sgn`, `mag`, `cross`, `dot`, `angle`,
+   `asinh`, `newtonnu`, `rv2coe`, `jday`, `days2mdhms`, and `invjday`. Nothing
+   that remains calls them.
+5. **Removed** the `InputBox` class, a Windows Forms dialog.
+
+What remains is `elsetrec`, `gravconsttype`, `getgravconst`, `gstime`,
+`initl`, `dscom`, `dpper`, `dsinit`, `dspace`, `sgp4init`, and `sgp4`, exactly as
+published.
