@@ -115,7 +115,7 @@ public class Sgp4VerificationTests
     public void Improved_and_afspc_modes_agree_exactly_for_a_near_earth_orbit()
     {
         // The mode only changes deep-space terms, so the ISS must be unaffected (assumption A2).
-        var iss = IssElements20260924;
+        var iss = TestElements.Iss20260924;
         var improved = Sgp4Propagator.Create(iss, OperationMode.Improved);
         var afspc = Sgp4Propagator.Create(iss, OperationMode.Afspc);
 
@@ -147,22 +147,6 @@ public class Sgp4VerificationTests
 
         Assert.True(largestDifferenceKm > 0.1, $"Largest difference was only {largestDifferenceKm} km.");
     }
-
-    // ISS (ZARYA) from CelesTrak GROUP=stations, downloaded 2026-09-24.
-    private static readonly MeanElements IssElements20260924 = new()
-    {
-        CatalogNumber = 25544,
-        Epoch = new DateTimeOffset(2026, 9, 24, 3, 24, 21, TimeSpan.Zero).AddTicks(4_525_440),
-        MeanMotion = 15.49258637,
-        Eccentricity = 0.00046914,
-        Inclination = 51.6318,
-        RightAscensionOfAscendingNode = 170.3464,
-        ArgumentOfPericenter = 174.6338,
-        MeanAnomaly = 185.4701,
-        BStar = 0.00018115501,
-        MeanMotionDot = 9.634e-5,
-        MeanMotionDdot = 0,
-    };
 
     private static double Distance(Vec3 a, Vec3 b) =>
         Math.Sqrt(Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2) + Math.Pow(a.Z - b.Z, 2));
