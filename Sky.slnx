@@ -3,4 +3,7 @@
     <Project Path="src/Sky.Orbital/Sky.Orbital.csproj" />
     <Project Path="src/Sky.Sgp4/Sky.Sgp4.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sky.Orbital.Tests/Sky.Orbital.Tests.csproj" />
+  </Folder>
 </Solution>
