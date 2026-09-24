@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Vallado's reference SGP4, kept as close to upstream as possible so it can be
+    compared line by line with the original. See NOTICE.md for provenance.
+    The repo-wide strictness settings are relaxed here on purpose.
+  -->
+  <PropertyGroup>
+    <Nullable>disable</Nullable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <AnalysisMode>None</AnalysisMode>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

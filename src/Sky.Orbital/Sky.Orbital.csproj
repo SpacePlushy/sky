@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sky.Sgp4\Sky.Sgp4.csproj" />
+  </ItemGroup>
+
+</Project>

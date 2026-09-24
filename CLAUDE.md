@@ -67,15 +67,35 @@ verification story must be strong enough to explain to a stranger.
 
 ## Commands
 
-No projects exist yet. These are the intended commands. They get wired up and
-verified in Milestone 1, and this section is updated to match.
+Run from the repo root.
 
 ```bash
-dotnet build          # build all .NET projects
-dotnet test           # run xUnit tests
-npm run dev           # start the Vite dev server (from the web project)
-docker compose up     # one-command local run
+dotnet build Sky.slnx                             # build everything
+dotnet test --solution Sky.slnx                   # run all tests
+dotnet format Sky.slnx --verify-no-changes        # lint; CI fails on any diff
+dotnet format Sky.slnx                            # fix formatting
 ```
+
+The CLI arrives later in Milestone 1. The API, web app, and `docker compose up`
+arrive in Milestone 3.
+
+## Repo layout
+
+- `src/Sky.Sgp4` is Vallado's reference SGP4, kept as close to upstream as
+  possible. Do not edit its math. Formatting and analyzers skip it on purpose.
+  See its `NOTICE.md`.
+- `src/Sky.Orbital` is pure math: no I/O, no network, no clock access.
+- `tests/*` mirror `src/*`. Reference data lives next to the tests that use it.
+- `docs/plans` holds approved milestone plans. `docs/adr` records decisions.
+
+## Build settings
+
+- `Directory.Build.props` applies nullable, warnings as errors, and the
+  recommended analyzer set to every project except `Sky.Sgp4`.
+- `Directory.Packages.props` holds every NuGet version. Project files never
+  carry a `Version` attribute.
+- `global.json` pins the .NET 10 SDK and selects Microsoft Testing Platform as
+  the test runner. xUnit v3 needs it.
 
 ## Local toolchain (macOS)
 

@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sky.Orbital/Sky.Orbital.csproj" />
+    <Project Path="src/Sky.Sgp4/Sky.Sgp4.csproj" />
+  </Folder>
+</Solution>
