@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build, lint, test
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore Sky.slnx
+
+      - name: Build
+        run: dotnet build Sky.slnx --no-restore --configuration Release
+
+      - name: Lint (formatting and code style)
+        run: dotnet format Sky.slnx --no-restore --verify-no-changes
+
+      - name: Test
+        run: dotnet test --solution Sky.slnx --no-build --configuration Release
