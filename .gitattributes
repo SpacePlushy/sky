@@ -4,3 +4,6 @@
 # Vallado's upstream SGP4 source keeps its original bytes (CRLF, BOM) so it
 # can be compared exactly with the file in the CelesTrak package.
 src/Sky.Sgp4/SGP4Lib.cs -text
+
+# Reference data files keep their published bytes so checksums stay verifiable.
+tests/Sky.Orbital.Tests/Data/Vallado/* -text
