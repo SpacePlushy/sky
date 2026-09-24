@@ -3,6 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+  # Weekly run with no code change. A new .NET runtime or OS math library can change
+  # floating-point results, and the tolerances must keep holding when that happens.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,8 +18,14 @@ concurrency:
 
 jobs:
   build-test:
-    name: Build, lint, test
-    runs-on: ubuntu-latest
+    name: Build and test (${{ matrix.os }})
+    # Each OS ships a different math library (glibc, Apple libm, the Windows CRT), so the
+    # verification tests run on all three to prove the tolerances hold everywhere.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_NOLOGO: "1"
@@ -32,6 +43,7 @@ jobs:
         run: dotnet build Sky.slnx --no-restore --configuration Release
 
       - name: Lint (formatting and code style)
+        if: matrix.os == 'ubuntu-latest'
         run: dotnet format Sky.slnx --no-restore --verify-no-changes
 
       - name: Test
