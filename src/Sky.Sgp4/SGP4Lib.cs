@@ -3,8 +3,8 @@
 //   Spacetrack Report #3", AIAA 2006-6753, 2006.
 //   https://celestrak.org/publications/AIAA/2006-6753/
 // Taken from AIAA-2006-6753.zip, file sgp4/cs/SGP4Lib/SGP4Lib/SGP4Lib.cs.
-// The propagation math is unmodified. Every change from upstream is listed
-// in NOTICE.md in this folder.
+// The arithmetic is unmodified. Every change from upstream is listed in
+// NOTICE.md in this folder.
 
 using System;
 using System.Collections.Generic;
@@ -1816,7 +1816,7 @@ namespace SGP4Methods
                 //         printf("# error nm %f\n", nm);
                 satrec.error = 2;
                 // sgp4fix add return
-                //return false;
+                return; // Sky: restored to match the C++ version, see NOTICE.md
             }
             am = Math.Pow((satrec.xke / nm), x2o3) * tempa * tempa;
             nm = satrec.xke / Math.Pow(am, 1.5);
@@ -1829,7 +1829,7 @@ namespace SGP4Methods
                 //         printf("# error em %f\n", em);
                 satrec.error = 1;
                 // sgp4fix to return if there is an error in eccentricity
-                //return false;
+                return; // Sky: restored to match the C++ version, see NOTICE.md
             }
             // sgp4fix fix tolerance to avoid a divide by zero
             if (em < 1.0e-6)
@@ -1893,7 +1893,7 @@ namespace SGP4Methods
                     //            printf("# error ep %f\n", ep);
                     satrec.error = 3;
                     // sgp4fix add return
-                    //return false;
+                    return; // Sky: restored to match the C++ version, see NOTICE.md
                 }
             } // if method = d
 
@@ -1946,7 +1946,7 @@ namespace SGP4Methods
                 //         printf("# error pl %f\n", pl);
                 satrec.error = 4;
                 // sgp4fix add return
-                //return false;
+                return; // Sky: restored to match the C++ version, see NOTICE.md
             }
             else
             {
@@ -2011,7 +2011,7 @@ namespace SGP4Methods
             {
                 //         printf("# decay condition %11.6f \n",mrt);
                 satrec.error = 6;
-                //return false;
+                return; // Sky: restored to match the C++ version, see NOTICE.md
             }
 
             //#include "debug7.cpp"

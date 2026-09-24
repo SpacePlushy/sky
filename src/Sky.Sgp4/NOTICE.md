@@ -38,7 +38,7 @@ header comment in `SGP4Lib.cs`, and the project README do that.
 
 ## Changes from upstream
 
-The propagation math is unmodified. These are the only changes:
+The arithmetic is unmodified. These are the only changes:
 
 1. **Added** a citation header comment at the top of the file, as the FAQ asks.
 2. **Removed** `using System.Drawing;` and `using System.Windows.Forms;`, which
@@ -53,6 +53,35 @@ The propagation math is unmodified. These are the only changes:
    that remains calls them.
 5. **Removed** the `InputBox` class, a Windows Forms dialog.
 
+6. **Restored** the five early `return` statements in `sgp4` that follow error
+   codes 1, 2, 3, 4, and 6. The C++ version in the same package returns at each
+   of these points ("sgp4fix add return"). The C# version has them commented
+   out, so execution continued and the final decay check overwrote the real
+   error code with 6. Vallado's verification set exposes this: satellite 33333
+   must report error 4 and satellite 33334 must report error 3, and without the
+   returns both report 6. Each restored line carries a `// Sky:` comment.
+
 What remains is `elsetrec`, `gravconsttype`, `getgravconst`, `gstime`,
-`initl`, `dscom`, `dpper`, `dsinit`, `dspace`, `sgp4init`, and `sgp4`, exactly as
-published.
+`initl`, `dscom`, `dpper`, `dsinit`, `dspace`, `sgp4init`, and `sgp4`.
+
+## Known differences from the C++ version, left as-is
+
+A statement-by-statement comparison of every remaining function against
+`sgp4/cpp/SGP4/SGP4/SGP4.cpp` from the same package found only these
+differences, none of which affect improved mode `'i'`:
+
+- **`initl` in AFSPC mode `'a'`.** The C# code uses the older 1970-based
+  sidereal-time formula for `gsto` in mode `'a'`. The C++ code computes that
+  value but then always uses `gstime`. This changes resonant deep-space orbits
+  by nanometers to micrometers in mode `'a'` only. Sky uses mode `'i'`, which
+  is the mode Vallado's reference output was generated in.
+- **Cosmetic differences.** C# uses `%` where C++ uses `fmod` (the semantics are
+  identical for doubles), and C# zero-initializes some locals and the output
+  vectors.
+
+## Verification
+
+`tests/Sky.Orbital.Tests/Propagation/Sgp4VerificationTests.cs` runs all 33
+cases in Vallado's `SGP4-VER.TLE` and compares 666 states against the
+reference output `tcppver.out` to 2e-7 km and km/s, the same bound
+python-sgp4 uses. It also checks all seven published error cases.
