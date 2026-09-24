@@ -76,3 +76,31 @@ dotnet test           # run xUnit tests
 npm run dev           # start the Vite dev server (from the web project)
 docker compose up     # one-command local run
 ```
+
+## Local toolchain (macOS)
+
+Installed with Homebrew formulae. No casks, no sudo, no Docker Desktop.
+
+```bash
+brew install dotnet colima docker docker-compose
+```
+
+| Tool           | Verified version                          |
+| -------------- | ----------------------------------------- |
+| .NET SDK       | 10.0.401 (ASP.NET Core runtime 10.0.12)   |
+| Node / npm     | 24.21 / 11.19                             |
+| Docker CLI     | 29.8.1, with Compose 5.5.1                |
+| Colima         | 0.10.3 (Linux VM that runs the containers)|
+
+Two one-time setup steps, already done on the owner's machine:
+
+- `DOTNET_ROOT=/opt/homebrew/opt/dotnet/libexec` is exported in
+  `~/.zprofile`. Without it, built apphosts cannot find the runtime.
+- `~/.docker/config.json` sets `cliPluginsExtraDirs` to
+  `/opt/homebrew/lib/docker/cli-plugins` so `docker compose` works.
+
+Start the container runtime before any Docker command:
+
+```bash
+colima start
+```
