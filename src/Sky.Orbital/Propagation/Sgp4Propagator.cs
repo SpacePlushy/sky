@@ -1,6 +1,7 @@
 using System.Globalization;
 using SGP4Methods;
 using Sky.Orbital.Elements;
+using Sky.Orbital.Time;
 
 namespace Sky.Orbital.Propagation;
 
@@ -15,7 +16,6 @@ namespace Sky.Orbital.Propagation;
 public sealed class Sgp4Propagator
 {
     // SGP4's epoch argument is days since 1949 December 31 00:00 UT (Julian date 2433281.5).
-    private static readonly DateTimeOffset Sgp4EpochOrigin = new(1949, 12, 31, 0, 0, 0, TimeSpan.Zero);
     private const double Sgp4EpochJulianDate = 2433281.5;
 
     // Unit conversions written exactly as Vallado's TLE reader writes them, so the
@@ -92,18 +92,13 @@ public sealed class Sgp4Propagator
     /// Vallado's reference code computes it.
     /// </summary>
     /// <remarks>
-    /// Upstream forms (Julian date of midnight + fraction of day) - 2433281.5. The sum rounds
+    /// Upstream forms (Julian date of midnight + fraction of day) - 2433281.5, which is
+    /// <see cref="JulianDate.Value"/> minus that constant. The sum rounds
     /// at Julian-date magnitude, which shifts the epoch by up to about 20 microseconds. Only the
     /// deep-space lunar and solar terms see the epoch, but for very eccentric orbits that shift
     /// moves the result by millimeters. Reproducing the arithmetic keeps Sky within 0.2 mm of
     /// Vallado's verification output, python-sgp4, and Skyfield.
     /// </remarks>
-    private static double Sgp4EpochDays(DateTimeOffset epoch)
-    {
-        DateTime utc = epoch.UtcDateTime;
-        DateTime midnight = utc.Date;
-        double julianDateOfMidnight = Sgp4EpochJulianDate + (midnight - Sgp4EpochOrigin.UtcDateTime).Days;
-        double fractionOfDay = (utc - midnight).Ticks / (double)TimeSpan.TicksPerDay;
-        return (julianDateOfMidnight + fractionOfDay) - Sgp4EpochJulianDate;
-    }
+    private static double Sgp4EpochDays(DateTimeOffset epoch) =>
+        JulianDate.FromInstant(epoch).Value - Sgp4EpochJulianDate;
 }
