@@ -1,7 +1,8 @@
 namespace Sky.Orbital.Propagation;
 
 /// <summary>The outcome of one SGP4 propagation: a state, or the error SGP4 reported.</summary>
-public readonly record struct PropagationResult
+/// <remarks>A class rather than a struct, so no default value can masquerade as a successful result.</remarks>
+public sealed record PropagationResult
 {
     private readonly TemeState _state;
 
@@ -13,7 +14,6 @@ public readonly record struct PropagationResult
 
     internal PropagationResult(Sgp4Error error)
     {
-        _state = default;
         Error = error;
     }
 

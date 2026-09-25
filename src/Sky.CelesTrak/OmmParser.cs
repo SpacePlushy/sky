@@ -67,7 +67,7 @@ public static class OmmParser
         {
             Name = OptionalString(record, "OBJECT_NAME"),
             ObjectId = OptionalString(record, "OBJECT_ID"),
-            EphemerisType = (int)OptionalDouble(record, "EPHEMERIS_TYPE", context),
+            EphemerisType = (int)RequiredDouble(record, "EPHEMERIS_TYPE", context),
             Elements = new MeanElements
             {
                 CatalogNumber = catalogNumber,

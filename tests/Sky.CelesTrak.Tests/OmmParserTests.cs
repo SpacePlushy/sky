@@ -158,6 +158,7 @@ public class OmmParserTests
     [InlineData("MEAN_ANOMALY")]
     [InlineData("BSTAR")]
     [InlineData("NORAD_CAT_ID")]
+    [InlineData("EPHEMERIS_TYPE")] // without it, the elements cannot be confirmed as SGP4 rather than SGP4-XP
     public void Rejects_a_record_missing_a_required_field(string field)
     {
         var record = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(Record())!;

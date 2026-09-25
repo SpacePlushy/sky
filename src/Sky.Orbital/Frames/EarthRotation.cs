@@ -45,7 +45,8 @@ public static class EarthRotation
         // Using the rate of the GMST angle itself makes the result exactly the time derivative
         // of the Earth-fixed position above. Vallado's teme2ecef uses the Earth's inertial rate
         // instead, which is lower by the precession of the equinox (7.1e-12 rad/s, 0.05 mm/s at
-        // low-Earth-orbit radius). Skyfield uses the GMST rate, as here.
+        // low-Earth-orbit radius). Skyfield's TEME_to_ITRF uses the GMST rate, as here; its ITRS
+        // frame uses the IERS nominal rate. See docs/adr/0003-earth-rotation-rate.md.
         var velocity = new Vec3(
             rotatedVelocity.X + (rate * position.Y),
             rotatedVelocity.Y - (rate * position.X),

@@ -6,7 +6,7 @@ public enum Sgp4Error
     /// <summary>Propagation succeeded.</summary>
     None = 0,
 
-    /// <summary>Mean eccentricity is outside [0, 1).</summary>
+    /// <summary>Mean eccentricity is outside [-0.001, 1). Upstream tolerates slightly negative values from drag.</summary>
     MeanEccentricityOutOfRange = 1,
 
     /// <summary>Mean motion is not positive.</summary>

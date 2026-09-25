@@ -14,7 +14,8 @@ public class Sgp4CharacterizationTests
     {
         // SGP4 computes velocity with approximate short-period terms, so its velocity is not
         // exactly the time derivative of its position. For this ISS element set over 7 days the gap
-        // peaks at 2.24e-5 km/s (22 mm/s), identical in python-sgp4 2.25. Range rate inherits this.
+        // peaks at 2.24e-5 km/s (22 mm/s), identical in python-sgp4 2.25 and 2.27
+        // (pure Python and compiled C++). Range rate inherits this.
         // A unit or scaling error in the wrapper would break the bound by orders of magnitude.
         var iss = TestElements.Iss20260924;
         var propagator = Sgp4Propagator.Create(iss);
