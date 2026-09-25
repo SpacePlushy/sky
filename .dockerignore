@@ -1,8 +1,8 @@
 # Private and machine-specific files never enter the build context.
 **/appsettings.Local.json
 **/*.local.json
-.env
-.env.*
+**/.env
+**/.env.*
 
 # Build output and dependencies are rebuilt inside the image.
 **/bin

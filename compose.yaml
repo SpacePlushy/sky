@@ -25,3 +25,6 @@ services:
     volumes:
       - ${SKY_CACHE_DIR:-./deploy/demo-cache}:/data/celestrak:ro
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

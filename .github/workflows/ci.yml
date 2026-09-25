@@ -77,15 +77,36 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # A stand-in for the owner's gitignored real-location file. It must never reach the image.
-      - name: Plant a private settings file
-        run: echo '{"Observer":{"Name":"PRIVATE-SENTINEL-7c1f"}}' > src/Sky.Cli/appsettings.Local.json
+      # Stand-ins for the owner's gitignored private files. They must never reach any image layer.
+      - name: Plant private files
+        run: |
+          echo '{"Observer":{"Name":"PRIVATE-SENTINEL-7c1f"}}' > src/Sky.Cli/appsettings.Local.json
+          echo 'VITE_SENTINEL=PRIVATE-SENTINEL-7c1f' > web/.env.local
 
       - name: Build
         run: docker compose build
 
-      - name: The image holds no private settings
-        run: docker run --rm --entrypoint sh sky-over-phoenix:local -c 'command -v grep >/dev/null && ! grep -rq PRIVATE-SENTINEL-7c1f /app'
+      # Scan the whole image filesystem from outside, with no permission checks, and require
+      # grep's "not found" status exactly: 0 (found) and 2 (an error) both fail.
+      - name: The image holds no private files
+        shell: bash
+        run: |
+          set -uo pipefail
+          cid=$(docker create sky-over-phoenix:local)
+          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f; rc=$?
+          docker rm "$cid" >/dev/null
+          test "$rc" -eq 1
+
+      # The build stages too: the web stage copies web/ and Vite would load a .env.local there.
+      - name: The build stages hold no private files
+        shell: bash
+        run: |
+          set -uo pipefail
+          docker build --target web -t sky-web-stage .
+          cid=$(docker create sky-web-stage)
+          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f; rc=$?
+          docker rm "$cid" >/dev/null
+          test "$rc" -eq 1
 
       - name: Run offline and check the API and the page
         run: |
