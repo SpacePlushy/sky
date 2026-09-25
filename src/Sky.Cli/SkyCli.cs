@@ -79,7 +79,8 @@ internal static class SkyCli
         Geodetic subpoint = Wgs84.FromEcef(ecef.Position);
         var frame = new TopocentricFrame(settings.Observer);
         LookAngles look = frame.LookAt(ecef);
-        PassSearchResult upcoming = CoarsePassFinder.Find(propagator, frame, t, t.AddDays(7), settings.MinimumElevationDegrees);
+        DateTimeOffset searchStart = Format.CeilingToSecond(t);
+        PassSearchResult upcoming = CoarsePassFinder.Find(propagator, frame, searchStart, searchStart.AddDays(7), settings.MinimumElevationDegrees);
         SatellitePass? next = upcoming.Passes.Count > 0 ? upcoming.Passes[0] : null;
 
         TextWriter o = env.Out;
@@ -132,21 +133,23 @@ internal static class SkyCli
 
         double minimum = minimumElevation ?? settings.MinimumElevationDegrees;
         DateTimeOffset t = env.Time.GetUtcNow();
-        PassSearchResult search = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), t, t.AddDays(days), minimum);
+        // Start on a whole second, so the 10 s rise and set samples print exactly.
+        DateTimeOffset searchStart = Format.CeilingToSecond(t);
+        PassSearchResult search = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), searchStart, searchStart.AddDays(days), minimum);
         var found = search.Passes.Take(count).ToList();
         TimeZoneInfo zone = settings.TimeZone;
 
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
         await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Number(minimum, 0)}° in the next {days} days. Times in {zone.Id} ({Format.OffsetLabel(zone, t, t.AddDays(days))}).").ConfigureAwait(false);
-        await o.WriteLineAsync("Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and 0.06°. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
+        await o.WriteLineAsync($"Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and {Format.BoundDegrees(CoarsePassFinder.PeakElevationBoundDegrees(record.Elements))}°. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
         await o.WriteLineAsync().ConfigureAwait(false);
-        await o.WriteLineAsync("  Rise                 Az       Peak      El      Az       Set       Az").ConfigureAwait(false);
+        await o.WriteLineAsync("  Rise                 Az       Peak        El      Az       Set       Az").ConfigureAwait(false);
         foreach (SatellitePass pass in found)
         {
             await o.WriteLineAsync(
                 $"  {Format.LocalTime(pass.Rise.Time, zone)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
-                $"{Format.LocalClock(pass.Culmination.Time, zone)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
+                $"{Format.LocalClockTenths(pass.Culmination.Time, zone)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
                 $"{Format.LocalClock(pass.Set.Time, zone)}  {Azimuth(pass.Set.AzimuthDegrees)}").ConfigureAwait(false);
         }
 

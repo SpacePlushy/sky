@@ -1,3 +1,4 @@
+using Sky.Orbital.Elements;
 using Sky.Orbital.Frames;
 using Sky.Orbital.Propagation;
 
@@ -33,6 +34,41 @@ public static class CoarsePassFinder
 
     /// <summary>The step used to refine each peak.</summary>
     public static readonly TimeSpan PeakStep = TimeSpan.FromSeconds(0.1);
+
+    /// <summary>
+    /// The most a reported peak elevation can fall short of the true peak for this satellite, in
+    /// degrees, for any observer allowed by the settings (up to 9 km above the ellipsoid).
+    /// </summary>
+    /// <remarks>
+    /// The reported peak is the highest 0.1 s sample, so it is within 0.05 s of the nearer sample
+    /// bracketing the true peak, and falls short by at most the fastest the line of sight can turn,
+    /// times 0.05 s. That rate is at most the satellite's speed relative to the Earth divided by
+    /// the shortest possible range:
+    /// <list type="bullet">
+    /// <item>Radii come from the mean elements (a from mean motion, WGS-72 mu), widened by 25 km
+    /// each way to cover SGP4's short-period swings, the mean-motion convention, and a week of drag.</item>
+    /// <item>Speed is vis-viva at the lowest radius, plus Earth rotation at the highest.</item>
+    /// <item>Range is the lowest radius minus the largest observer radius, 6378.137 km + 9 km.</item>
+    /// </list>
+    /// For the ISS this gives 0.062 degrees; an exactly overhead pass measures 0.0495.
+    /// </remarks>
+    public static double PeakElevationBoundDegrees(MeanElements elements)
+    {
+        ArgumentNullException.ThrowIfNull(elements);
+        const double mu = 398600.8;                   // km^3/s^2, WGS-72 as SGP4 uses
+        const double earthRotation = 7.292115855e-5;  // rad/s, GMST rate
+        const double marginKm = 25.0;
+        const double largestObserverRadiusKm = 6378.137 + 9.0;
+
+        double n = elements.MeanMotion * 2.0 * Math.PI / 86400.0;
+        double a = Math.Cbrt(mu / (n * n));
+        double lowest = (a * (1.0 - elements.Eccentricity)) - marginKm;
+        double highest = (a * (1.0 + elements.Eccentricity)) + marginKm;
+        double speed = Math.Sqrt(mu * ((2.0 / lowest) - (1.0 / a))) + (earthRotation * highest);
+        double nearest = Math.Max(lowest - largestObserverRadiusKm, 1.0);
+        double halfStep = PeakStep.TotalSeconds / 2.0;
+        return speed / nearest * halfStep * 180.0 / Math.PI;
+    }
 
     /// <summary>Finds complete passes between two instants.</summary>
     /// <param name="propagator">The satellite.</param>

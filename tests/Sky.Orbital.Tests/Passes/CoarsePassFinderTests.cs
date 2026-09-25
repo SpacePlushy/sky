@@ -85,30 +85,51 @@ public class CoarsePassFinderTests
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(3)]
-    [InlineData(5)]
-    [InlineData(7)]
-    public void An_overhead_pass_peaks_at_90_degrees_at_the_moment_the_satellite_is_overhead(int secondsOffGrid)
+    [InlineData(0.05)]
+    [InlineData(3.05)]
+    [InlineData(5.05)]
+    [InlineData(7.05)]
+    public void An_overhead_pass_peaks_at_90_degrees_at_the_moment_the_satellite_is_overhead(double secondsOffGrid)
     {
         // Exact geometry: an observer at the ISS's subpoint at time t0, at zero height, has the ISS on
         // its local vertical at t0, so the true peak is 90 degrees at t0. Elevation changes about 1
-        // degree per second near the zenith, the worst case for sampling. The search grid is placed
-        // so t0 falls between samples.
+        // degree per second near the zenith, the worst case for sampling. Each offset puts t0 halfway
+        // between 0.1 s peak samples (and between 10 s samples), so this exercises the worst case.
         var t0 = WindowStart.AddHours(5);
         var ecef = EarthRotation.TemeToEcef(Iss.Propagate(t0).State, t0);
         var subpoint = Wgs84.FromEcef(ecef.Position);
         var observer = new TopocentricFrame(subpoint with { HeightKm = 0 });
-        var start = t0.AddSeconds(-1800 - secondsOffGrid);
+        var start = t0.AddTicks(-(long)Math.Round((1800 + secondsOffGrid) * TimeSpan.TicksPerSecond));
 
         var passes = CoarsePassFinder.Find(Iss, observer, start, start.AddHours(1), 10.0).Passes;
 
         var pass = Assert.Single(passes);
-        // Bounds: the peak search steps 0.1 s, so the best sample is within 0.1 s of the true peak
-        // and at most 0.05 s of the nearer bracketing sample. The line of sight turns at most
-        // 7.7 km/s / 410 km = 1.08 deg/s, so the shortfall is at most 0.054 deg.
+        double shortfall = 90.0 - pass.Culmination.ElevationDegrees;
         Assert.InRange((pass.Culmination.Time - t0).TotalSeconds, -0.1, 0.1);
-        Assert.InRange(pass.Culmination.ElevationDegrees, 90.0 - 0.06, 90.0);
+        Assert.InRange(shortfall, 0.0, CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements));
+        // The test itself: the peak really fell between samples, so the bound was exercised.
+        Assert.True(shortfall > 0.02, $"Shortfall {shortfall} degrees: the worst case was not exercised.");
+    }
+
+    [Fact]
+    public void Peak_elevation_bound_for_the_iss_matches_the_hand_derivation()
+    {
+        // From the ISS elements: n = 15.49258637 rev/day, e = 0.00047, mu = 398600.8 km^3/s^2.
+        // a = (mu / n^2)^(1/3) = 6795.4 km; perigee 6792.2 km, apogee 6798.6 km; lowest radius with
+        // the 25 km margin 6767.2 km. Vis-viva there: 7.691 km/s. Plus Earth rotation at apogee
+        // plus margin, 7.2921e-5 * 6823.6 = 0.4976 km/s: 8.189 km/s. Nearest possible observer:
+        // 6767.2 - (6378.137 + 9) = 380.1 km. Line of sight turns at most 0.021545 rad/s; over half
+        // a 0.1 s peak step that is 1.0773e-3 rad = 0.0617 degrees.
+        Assert.Equal(0.0617, CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements), 5e-4);
+    }
+
+    [Fact]
+    public void Peak_elevation_bound_grows_as_the_orbit_gets_lower()
+    {
+        var lower = Reference.MeanElements with { MeanMotion = 16.0 }; // about 270 km perigee
+
+        Assert.True(
+            CoarsePassFinder.PeakElevationBoundDegrees(lower) > CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements));
     }
 
     private static double ElevationAt(DateTimeOffset t) =>

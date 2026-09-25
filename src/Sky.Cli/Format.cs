@@ -14,6 +14,21 @@ internal static class Format
     public static string LocalClock(DateTimeOffset instant, TimeZoneInfo zone) =>
         TimeZoneInfo.ConvertTime(instant, zone).ToString("HH:mm:ss", CultureInfo.InvariantCulture);
 
+    /// <summary>Clock time with tenths of a second, in a zone.</summary>
+    public static string LocalClockTenths(DateTimeOffset instant, TimeZoneInfo zone) =>
+        TimeZoneInfo.ConvertTime(instant, zone).ToString("HH:mm:ss.f", CultureInfo.InvariantCulture);
+
+    /// <summary>The next whole second at or after an instant, so sampled times print exactly.</summary>
+    public static DateTimeOffset CeilingToSecond(DateTimeOffset instant)
+    {
+        long remainder = instant.Ticks % TimeSpan.TicksPerSecond;
+        return remainder == 0 ? instant : instant.AddTicks(TimeSpan.TicksPerSecond - remainder);
+    }
+
+    /// <summary>A bound in degrees, rounded up to 3 decimals so the printed value is still a bound.</summary>
+    public static string BoundDegrees(double degrees) =>
+        (Math.Ceiling(degrees * 1000.0) / 1000.0).ToString("F3", CultureInfo.InvariantCulture);
+
     /// <summary>An instant in UTC.</summary>
     public static string Utc(DateTimeOffset instant) =>
         instant.ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);

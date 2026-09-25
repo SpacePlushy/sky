@@ -78,12 +78,39 @@ public sealed partial class CommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Passes_states_the_finders_bounds()
+    public async Task Passes_states_the_finders_bounds_for_the_chosen_satellite()
     {
         await _cli.RunAsync("passes");
 
-        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.06°", _cli.Out.ToString(), StringComparison.Ordinal);
+        // 0.0617 degrees for the ISS (see CoarsePassFinderTests), rounded up to 0.062.
+        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.062°", _cli.Out.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Printed_times_keep_their_stated_precision_from_a_fractional_clock_time()
+    {
+        // The search starts on the next whole second, so rise and set print exactly, and peaks
+        // print to tenths, keeping the 0.1 s peak bound in the output.
+        _cli.Clock.SetUtcNow(Now.AddMilliseconds(700));
+
+        await _cli.RunAsync("passes");
+
+        var reference = Skyfield.GetProperty("passes").EnumerateArray().Take(5).ToList();
+        var rows = PassRow().Matches(_cli.Out.ToString()).ToList();
+        Assert.Equal(5, rows.Count);
+        foreach (var (row, pass) in rows.Zip(reference))
+        {
+            var riseUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
+            Assert.InRange((riseUtc - pass.GetProperty("rise").GetProperty("utc").GetDateTimeOffset()).TotalSeconds, -0.001, 10.001);
+
+            var peakClock = TimeSpan.ParseExact(row.Groups["peak"].Value, @"hh\:mm\:ss\.f", CultureInfo.InvariantCulture);
+            var peakUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture) + peakClock);
+            Assert.InRange((peakUtc - pass.GetProperty("culmination").GetProperty("utc").GetDateTimeOffset()).TotalSeconds, -0.101, 0.101);
+        }
+    }
+
+    private static DateTimeOffset ToUtc(DateTime phoenixLocal) =>
+        new(TimeZoneInfo.ConvertTimeToUtc(phoenixLocal, Phoenix), TimeSpan.Zero);
 
     [Fact]
     public async Task Now_during_a_pass_says_the_pass_is_in_progress()
@@ -163,6 +190,6 @@ public sealed partial class CommandTests : IDisposable
         return double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
     }
 
-    [GeneratedRegex(@"^\s*(?<rise>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\s*(?<rise>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\S+\s+(?<peak>\d{2}:\d{2}:\d{2}\.\d)\s", RegexOptions.Multiline)]
     private static partial Regex PassRow();
 }
