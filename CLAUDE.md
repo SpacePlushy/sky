@@ -13,6 +13,8 @@ verification story must be strong enough to explain to a stranger.
 
 ## How we work
 
+- **Resuming work?** Read `docs/handoff/README.md` first. It has the current
+  status, the next steps, and how to set up another machine.
 - **One milestone at a time.** A milestone is done when its tests pass and
   the owner has reviewed it. Do not start the next one without an OK.
 - **Propose before building.** For each milestone, propose structure and plan
