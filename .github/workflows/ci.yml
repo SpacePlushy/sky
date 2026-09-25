@@ -48,3 +48,57 @@ jobs:
 
       - name: Test
         run: dotnet test --solution Sky.slnx --no-build --configuration Release
+
+  web:
+    name: Web (type check, lint, unit tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+
+  docker:
+    name: Docker image (no private files, offline smoke test)
+    needs: [build-test, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # A stand-in for the owner's gitignored real-location file. It must never reach the image.
+      - name: Plant a private settings file
+        run: echo '{"Observer":{"Name":"PRIVATE-SENTINEL-7c1f"}}' > src/Sky.Cli/appsettings.Local.json
+
+      - name: Build
+        run: docker compose build
+
+      - name: The image holds no private settings
+        run: docker run --rm --entrypoint sh sky-over-phoenix:local -c 'command -v grep >/dev/null && ! grep -rq PRIVATE-SENTINEL-7c1f /app'
+
+      - name: Run offline and check the API and the page
+        run: |
+          docker compose up -d
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8080/api/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:8080/api/config | tee config.json
+          grep -q '"offline":true' config.json
+          grep -q 'Arizona State Capitol' config.json
+          curl -fsS http://127.0.0.1:8080/api/satellites/25544/now | grep -q '"timeUtc":"2026-09-24T04:0'
+          curl -fsS http://127.0.0.1:8080/ | grep -qi '<!doctype html'
+
+      - name: Logs and shutdown
+        if: always()
+        run: |
+          docker compose logs
+          docker compose down
