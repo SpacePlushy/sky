@@ -224,6 +224,23 @@ These came to light because tests failed. Each was traced to its source and meas
   for decaying objects over the CLI's 30-day window.
 - **The UT1 = UTC check** uses a per-sample bound derived from the Earth's rotation over
   UT1 − UTC, instead of the plan's flat 50 m and 20″, which assumed today's −0.015 s.
+- **ECEF to geodetic is not checked against Vallado Example 3-3's printed answer.** The book
+  uses R = 6378.1363 km rather than WGS-84's 6378.137 km, which moves that height by 0.7 m, so
+  it cannot anchor a WGS-84 check at the plan's 0.1 m. The conversion is checked instead
+  against an independent fixed-point solver at Example 3-3's input and 2,000 random points.
+- **The SGP4 check covers 666 states, not the plan's 667.** `tcppver.out` has 667 state lines,
+  but the single line for satellite 33334, which fails at initialization, is a stale copy of
+  the previous state and is ignored, as python-sgp4's own tests do.
+- **CI runs on Linux, macOS, and Windows, weekly, and on demand**, not only on ubuntu-latest,
+  because each system ships a different math library.
+- **The cache keeps two files per group**: `{group}.json`, the raw response, and
+  `{group}.state.json`, the request history and any block. The plan had one file that also
+  stored the newest element epoch; the epoch is read from the data instead.
+- **`sky unblock` was added** so a person clears a block after reading why it happened
+  (ADR 0002). The plan listed only `now` and `passes`.
+- **The CLI has its own test project**, `tests/Sky.Cli.Tests`, for settings, commands,
+  formatting, and the cache wiring. The plan said the CLI held no logic worth testing; the
+  settings validation and time-zone handling turned out to need tests.
 
 ## Reference data
 

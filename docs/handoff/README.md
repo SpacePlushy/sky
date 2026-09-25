@@ -15,10 +15,14 @@ machines.
 
 ## Next steps, in order
 
-1. **Finish the review.** Fix anything the owner raises, with a test that fails first, then
-   push to `milestone-1`.
+1. **Finish the review.** It includes the approved plan's last "Done when" check: compare
+   `sky passes` with Heavens-Above or N2YO (rise and set within about 30 s, peak within
+   about 1°). That needs a live run, so read step 6 first. Fix anything the owner raises,
+   with a test that fails first, then push to `milestone-1`.
 2. **Open the pull request when the owner says so.** The description is ready in
-   [milestone-1-pr.md](milestone-1-pr.md). The owner merges it; do not enable auto-merge.
+   [milestone-1-pr.md](milestone-1-pr.md). If step 1 changed code or tests, first update its
+   test count and CI line to match the final pushed commit. The owner merges it; do not
+   enable auto-merge.
 
    ```bash
    gh pr create --base main --head milestone-1 --title "Milestone 1: orbital core and sky CLI" --body-file docs/handoff/milestone-1-pr.md
@@ -37,9 +41,9 @@ machines.
 
 | Tool | Needed for | macOS (Homebrew) | Windows (winget) | Linux |
 |---|---|---|---|---|
-| .NET 10 SDK, 10.0.100 or later | Build, test, run | `brew install dotnet` | `winget install Microsoft.DotNet.SDK.10` | Your distribution's `dotnet-sdk-10.0` package, or https://dotnet.microsoft.com/download |
+| .NET 10 SDK, 10.0.100 or later (not .NET 11; `global.json` refuses it) | Build, test, run | `brew install dotnet@10` | `winget install Microsoft.DotNet.SDK.10` | Your distribution's `dotnet-sdk-10.0` package, or https://dotnet.microsoft.com/download |
 | Git | Everything | Xcode Command Line Tools | `winget install Git.Git` | Your distribution's `git` package |
-| GitHub CLI | Opening the pull request | `brew install gh` | `winget install GitHub.cli` | https://cli.github.com |
+| GitHub CLI | Signing git in to GitHub for `git push` over HTTPS, and opening the pull request | `brew install gh` | `winget install GitHub.cli` | https://cli.github.com |
 | uv | Only to regenerate the Skyfield reference data | `brew install uv` | `winget install astral-sh.uv` | https://docs.astral.sh/uv |
 
 Docker and Colima are not needed until Milestone 3. Python is not needed to run the tests.
@@ -48,10 +52,16 @@ On macOS, Homebrew's .NET also needs `DOTNET_ROOT`, or built programs cannot fin
 runtime. Add it once, then open a new terminal:
 
 ```bash
-echo 'export DOTNET_ROOT="$(brew --prefix dotnet)/libexec"' >> ~/.zprofile
+echo 'export DOTNET_ROOT="$(brew --prefix dotnet@10)/libexec"' >> ~/.zprofile
 ```
 
-Sign in to GitHub yourself with `gh auth login`.
+Today `dotnet@10` is an alias of Homebrew's `dotnet` formula. Once .NET 11 ships, the plain
+`dotnet` formula moves to 11 and `dotnet@10` keeps this project's SDK. `dotnet --version`
+must print 10.0.x.
+
+Sign in to GitHub yourself with `gh auth login`. Choose HTTPS and answer yes to authenticating
+Git, or run `gh auth setup-git` afterwards. That makes `gh` git's credential helper; without
+it, `git push` over HTTPS fails.
 
 ### 2. Clone and switch to the branch
 
@@ -95,13 +105,22 @@ The cache does not travel with the repository, so a new machine starts empty and
 from the same public IP address until its data next updates, which happens every 2 hours. It
 answers with HTTP 403, and Sky then blocks that group until someone runs `sky unblock`.
 
+**A refused run still makes a second request.** The committed setting is
+`CelesTrak:Groups = stations,visual`, and Sky tries the groups in order until one holds the
+satellite. With `stations` refused and nothing cached, the same run downloads `visual` at
+once. If `visual` holds the ISS, the command prints normal output and the block shows only as
+a `warning: CelesTrak answered HTTP 403 for GROUP=stations` line on stderr. To make the first
+run cost one request at most, put `{ "CelesTrak": { "Groups": "stations" } }` in the
+gitignored `src/Sky.Cli/appsettings.Local.json` for that run.
+
 The old machine last asked CelesTrak at **2026-09-25 01:12:37 UTC** (18:12 on 2026-09-24 in
 Phoenix). Before the first run, do one of these:
 
 - **Copy the cache** from the old machine: both `stations.json` and `stations.state.json`.
   The new machine then serves that data until it is 6 hours old and keeps the old machine's
   request history.
-- **Wait** until 2 hours after the last request, which is 03:12 UTC on 2026-09-25.
+- **Wait** until 2 hours after the last request: 03:12:37 UTC on 2026-09-25 (20:12:37 on
+  2026-09-24 in Phoenix). Run no earlier than 03:13 UTC.
 - **Use a different network**, so the request comes from a different address.
 
 | System | Cache folder |
@@ -115,6 +134,10 @@ If a group does get blocked, read the error Sky printed, then clear it:
 ```bash
 dotnet run --project src/Sky.Cli -- unblock stations
 ```
+
+Sky records each request before sending it, and the refused one counts. `unblock` clears the
+block but not that record, so the next request for the group is allowed 2 hours after the
+refused one. A run before then prints the exact time and sends nothing.
 
 ### 7. Run it
 
@@ -136,8 +159,11 @@ dotnet run --project src/Sky.Cli -- passes
 
 ## Resuming with Claude Code
 
-Open Claude Code in the clone. `CLAUDE.md` loads by itself and points here. Then say, for
-example:
+Open Claude Code in the clone only after `git switch milestone-1` (step 2). A fresh clone
+checks out `main`, whose `CLAUDE.md` predates this guide and lacks the testing and
+verification rules. Claude Code reads `CLAUDE.md` when a session starts, so a session opened
+before the switch keeps the old one; restart it. On `milestone-1`, `CLAUDE.md` loads by
+itself and points here. Then say, for example:
 
 > Read docs/handoff/README.md and pick up where we left off. My Milestone 1 review is not done yet.
 
