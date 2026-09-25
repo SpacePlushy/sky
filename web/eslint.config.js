@@ -6,7 +6,7 @@ import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-    globalIgnores(["dist/", "node_modules/", "coverage/"]),
+    globalIgnores(["dist/", "node_modules/", "coverage/", "test-results/", "playwright-report/", "blob-report/"]),
     js.configs.recommended,
     tseslint.configs.strictTypeChecked,
     tseslint.configs.stylisticTypeChecked,
@@ -14,7 +14,12 @@ export default defineConfig(
         languageOptions: {
             globals: globals.browser,
             parserOptions: {
-                projectService: true,
+                projectService: {
+                    // The Playwright config sits beside tsconfig.json (the browser code) but is
+                    // Node code, checked with the end-to-end tests' settings (e2e/tsconfig.json).
+                    allowDefaultProject: ["playwright.config.ts"],
+                    defaultProject: "e2e/tsconfig.json",
+                },
                 tsconfigRootDir: import.meta.dirname,
             },
         },

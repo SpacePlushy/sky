@@ -11,10 +11,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p e2e",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "playwright test --project=chromium",
+    "screenshots": "playwright test --project=screenshots"
   },
   "dependencies": {
     "d3-geo": "3.1.1",
@@ -23,8 +25,10 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/d3-geo": "3.1.1",
     "@types/geojson": "7946.0.16",
+    "@types/node": "24.13.6",
     "@types/topojson-client": "3.1.5",
     "@types/topojson-specification": "1.0.5",
     "eslint": "10.11.0",
