@@ -10,8 +10,8 @@ namespace Sky.Orbital.Propagation;
 /// using WGS-72 constants as the element sets require.
 /// </summary>
 /// <remarks>
-/// Not thread-safe: SGP4 keeps integrator state between calls for deep-space orbits.
-/// Create one propagator per thread.
+/// Not thread-safe: SGP4 writes to its element record on every call (the time, the error code,
+/// and for deep-space orbits the integrator state). Create one propagator per thread.
 /// </remarks>
 public sealed class Sgp4Propagator
 {
@@ -63,6 +63,18 @@ public sealed class Sgp4Propagator
     public static Sgp4Propagator Create(MeanElements elements, OperationMode mode = OperationMode.Improved)
     {
         ArgumentNullException.ThrowIfNull(elements);
+        double[] values =
+        [
+            elements.MeanMotion, elements.Eccentricity, elements.Inclination, elements.RightAscensionOfAscendingNode,
+            elements.ArgumentOfPericenter, elements.MeanAnomaly, elements.BStar, elements.MeanMotionDot, elements.MeanMotionDdot,
+        ];
+        if (!values.All(double.IsFinite))
+        {
+            // SGP4's checks are comparisons, which are all false for NaN, so a non-finite element
+            // would otherwise come back as a "successful" NaN state.
+            throw new ArgumentException($"Element set for NORAD {elements.CatalogNumber} has a non-finite value.", nameof(elements));
+        }
+
         return new Sgp4Propagator(elements, mode);
     }
 

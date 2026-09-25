@@ -50,6 +50,30 @@ public class TleTests
     }
 
     [Theory]
+    [InlineData("56", 2056)]
+    [InlineData("57", 1957)]
+    [InlineData("00", 2000)]
+    [InlineData("99", 1999)]
+    public void Two_digit_years_pivot_between_56_and_57(string year, int expected)
+    {
+        var line1 = "1 00005U 58002B   " + year + "179.78495062  .00000023  00000-0  28098-4 0  4753";
+
+        Assert.Equal(expected, Tle.Parse(line1, Line2).Epoch.Year);
+    }
+
+    [Theory]
+    [InlineData("1 00005U 58002B   00    NaN     .00000023  00000-0  28098-4 0  4753", Line2)] // epoch day
+    [InlineData("1 00005U 58002B   00367.50000000  .00000023  00000-0  28098-4 0  4753", Line2)] // day past year end
+    [InlineData("1 00005U 58002B   00000.50000000  .00000023  00000-0  28098-4 0  4753", Line2)] // day zero
+    [InlineData(Line1, "2 00005      NaN 348.7242 1859667 331.7664  19.3264 10.82419157413667")] // inclination
+    [InlineData(Line1, "2 00005  34.2682 Infinity 1859667 331.7664  19.3264 10.82419157413667")] // RAAN
+    [InlineData(Line1, "2 00005  34.2682 348.7242 1859667 331.7664  19.3264 1.0e+0001413667")]  // exponent form
+    public void Rejects_non_finite_or_out_of_range_values(string line1, string line2)
+    {
+        Assert.Throws<FormatException>(() => Tle.Parse(line1, line2));
+    }
+
+    [Theory]
     // Fields use an implied leading decimal point and a signed power-of-ten exponent.
     [InlineData("1 21897U 92011A   06176.02341244 -.00001273  00000-0 -13525-3 0  3044", -1.3525e-4)]
     [InlineData("1 29141U 85108AA  06170.26783845  .99999999  00000-0  13519-0 0   718", 0.13519)]

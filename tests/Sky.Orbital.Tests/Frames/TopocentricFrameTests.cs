@@ -144,19 +144,20 @@ public class TopocentricFrameTests
         }
     }
 
-    [Fact]
-    public void Azimuth_stays_below_360_when_the_satellite_is_a_hair_west_of_north()
+    [Theory]
+    [InlineData(-1e-15, 0.0)]        // rounds to exactly 360 when shifted; must become 0
+    [InlineData(0.0, 0.0)]
+    [InlineData(-90.0, 270.0)]
+    [InlineData(-180.0, 180.0)]
+    [InlineData(180.0, 180.0)]
+    [InlineData(359.99999999999994, 359.99999999999994)]
+    public void Azimuth_normalizes_into_0_inclusive_to_360_exclusive(double atan2Degrees, double expected)
     {
-        // atan2 of a tiny negative east component is a tiny negative angle, and adding 360 to it
-        // rounds to exactly 360.0 in double precision. The documented range is [0, 360).
-        var frame = new TopocentricFrame(Phoenix);
-        var (east, north, _) = LocalAxes(Phoenix);
-        var satellite = Wgs84.ToEcef(Phoenix) + (north * 1000.0) + (east * -1e-14);
+        double azimuth = TopocentricFrame.NormalizeAzimuthDegrees(atan2Degrees);
 
-        double azimuth = frame.LookAt(new EcefState(satellite, default)).AzimuthDegrees;
-
-        Assert.InRange(azimuth, 0.0, 359.999999);
-        Assert.Equal(0.0, AngleDifference(0.0, azimuth), 1e-9);
+        Assert.Equal(expected, azimuth);
+        Assert.InRange(azimuth, 0.0, 359.99999999999994);
+        Assert.Equal(0.0, TopocentricFrame.NormalizeAzimuthDegrees(-0.0));
     }
 
     /// <summary>Signed difference b - a between two angles in degrees, in [-180, 180).</summary>

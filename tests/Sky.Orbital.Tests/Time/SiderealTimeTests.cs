@@ -9,12 +9,13 @@ public class SiderealTimeTests
     [Fact]
     public void Gmst_at_J2000_is_the_defining_constant()
     {
-        // IAU-82: GMST at J2000.0 UT1 is 67310.54841 s of time = 18h 41m 50.54841s = 280.46061837504 deg.
+        // IAU-82: GMST at J2000.0 UT1 is 67310.54841 s of time = 18h 41m 50.54841s; 67310.54841 / 240
+        // = 280.460618375 deg exactly.
         var jd = JulianDate.FromInstant(new DateTimeOffset(2000, 1, 1, 12, 0, 0, TimeSpan.Zero));
 
         double gmstDegrees = SiderealTime.GreenwichMean(jd) * RadiansToDegrees;
 
-        Assert.Equal(280.46061837504, gmstDegrees, 1e-9);
+        Assert.Equal(280.460618375, gmstDegrees, 1e-10);
     }
 
     [Fact]

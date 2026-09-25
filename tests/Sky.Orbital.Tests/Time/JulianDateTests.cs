@@ -40,6 +40,50 @@ public class JulianDateTests
     }
 
     [Fact]
+    public void Split_is_exact_across_1900_to_2100_including_either_side_of_midnight()
+    {
+        // Whole is the Julian date of the preceding midnight (ends in .5), Fraction is in [0, 1), and
+        // together they are the instant: whole days exactly, and the day's ticks to rounding.
+        var random = new Random(1900);
+        var epoch1900 = new DateTimeOffset(1900, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var instants = new List<DateTimeOffset>();
+        for (int i = 0; i < 3000; i++)
+        {
+            var day = epoch1900.AddDays(random.Next(0, 73049)); // through 2099-12-31
+            instants.Add(day.AddTicks((long)(random.NextDouble() * TimeSpan.TicksPerDay)));
+            instants.Add(day.AddTicks(-1));
+            instants.Add(day);
+        }
+
+        var j2000Midnight = new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        foreach (var instant in instants)
+        {
+            var jd = JulianDate.FromInstant(instant);
+
+            Assert.Equal(0.0, (jd.Whole - 0.5) % 1.0);
+            Assert.InRange(jd.Fraction, 0.0, 1.0 - 1e-17);
+            long wholeDaysTicks = (long)(jd.Whole - 2451544.5) * TimeSpan.TicksPerDay;
+            long expectedTicks = (instant - j2000Midnight).Ticks;
+            Assert.Equal(expectedTicks - wholeDaysTicks, jd.Fraction * TimeSpan.TicksPerDay, 1e-3);
+        }
+    }
+
+    [Fact]
+    public void Days_since_j2000_is_continuous_across_midnight()
+    {
+        var random = new Random(2100);
+        for (int i = 0; i < 1000; i++)
+        {
+            var midnight = new DateTimeOffset(1900, 1, 1, 0, 0, 0, TimeSpan.Zero).AddDays(random.Next(0, 73049));
+
+            double step = JulianDate.FromInstant(midnight).DaysSinceJ2000 - JulianDate.FromInstant(midnight.AddTicks(-1)).DaysSinceJ2000;
+
+            // One tick is 1.157e-12 days; at up to 36,525 days the values carry about 7e-12 days of rounding.
+            Assert.Equal(1.0 / TimeSpan.TicksPerDay, step, 2e-11);
+        }
+    }
+
+    [Fact]
     public void Uses_the_instant_not_the_local_clock_time()
     {
         var utc = new DateTimeOffset(2026, 9, 24, 3, 0, 0, TimeSpan.Zero);

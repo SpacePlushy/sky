@@ -100,7 +100,9 @@ public class GeodeticTests
                     Assert.Equal(h, g.HeightKm, 1e-9); // 1 micrometer
                     if (Math.Abs(lat) < 90)
                     {
-                        Assert.Equal(lon, g.LongitudeDegrees, 1e-12);
+                        // Compared as angles: an input of -180 comes back as 180, the same meridian.
+                        double difference = ((g.LongitudeDegrees - lon) % 360.0 + 540.0) % 360.0 - 180.0;
+                        Assert.Equal(0.0, difference, 1e-12);
                     }
                 }
             }
@@ -145,15 +147,65 @@ public class GeodeticTests
     }
 
     [Fact]
-    public void Matches_vallado_example_3_3()
+    public void Matches_an_independent_iterative_solution_including_vallado_example_3_3_input()
     {
-        // Vallado, Fundamentals of Astrodynamics and Applications, Example 3-3, on WGS-84,
-        // at the precision of the reference values. Sky gives 34.352495151, 46.446416857, 5085.2187311.
-        var g = Wgs84.FromEcef(new Vec3(6524.834, 6862.875, 6448.296));
+        // Vermeille's closed form against a different algorithm: the classic fixed-point iteration
+        // on geodetic latitude, run until it stops changing. The first point is the input of Vallado's
+        // Example 3-3. The book's printed answer uses R = 6378.1363 km rather than WGS-84's 6378.137,
+        // which moves this height by 0.7 m, so the book cannot anchor a WGS-84 check at that precision.
+        var random = new Random(33);
+        var points = new List<Vec3> { new(6524.834, 6862.875, 6448.296) };
+        for (int i = 0; i < 2000; i++)
+        {
+            double radius = 6000 + (random.NextDouble() * 44_000);
+            double z = (random.NextDouble() * 2) - 1;
+            double azimuth = random.NextDouble() * 2 * Math.PI;
+            double s = Math.Sqrt(1 - (z * z));
+            points.Add(new Vec3(radius * s * Math.Cos(azimuth), radius * s * Math.Sin(azimuth), radius * z));
+        }
 
-        Assert.Equal(34.352495, g.LatitudeDegrees, 1e-6);
-        Assert.Equal(46.446417, g.LongitudeDegrees, 1e-6);
-        Assert.Equal(5085.2187, g.HeightKm, 1e-4);
+        foreach (var r in points)
+        {
+            var (lat, height) = IterativeGeodetic(r);
+            var g = Wgs84.FromEcef(r);
+
+            Assert.Equal(lat, g.LatitudeDegrees, 1e-11);
+            Assert.Equal(height, g.HeightKm, 1e-9);
+        }
+    }
+
+    [Fact]
+    public void Longitude_on_the_antimeridian_is_180_never_minus_180()
+    {
+        // The documented range is (-180, 180]. atan2(-0.0, negative x) is -pi, which must map to 180.
+        Assert.Equal(180.0, Wgs84.FromEcef(new Vec3(-(A + 400), 0.0, 0)).LongitudeDegrees);
+        Assert.Equal(180.0, Wgs84.FromEcef(new Vec3(-(A + 400), -0.0, 0)).LongitudeDegrees);
+    }
+
+    /// <summary>Geodetic latitude and height by fixed-point iteration, independent of Vermeille.</summary>
+    private static (double LatitudeDegrees, double HeightKm) IterativeGeodetic(Vec3 r)
+    {
+        double e2 = (2 - (1 / InverseFlattening)) / InverseFlattening;
+        double rho = Math.Sqrt((r.X * r.X) + (r.Y * r.Y));
+        double lat = Math.Atan2(r.Z, rho * (1 - e2));
+        for (int i = 0; i < 200; i++)
+        {
+            double n = A / Math.Sqrt(1 - (e2 * Math.Sin(lat) * Math.Sin(lat)));
+            double next = Math.Atan2(r.Z + (e2 * n * Math.Sin(lat)), rho);
+            if (Math.Abs(next - lat) < 1e-16)
+            {
+                lat = next;
+                break;
+            }
+
+            lat = next;
+        }
+
+        double nFinal = A / Math.Sqrt(1 - (e2 * Math.Sin(lat) * Math.Sin(lat)));
+        double height = Math.Abs(Math.Cos(lat)) > 0.1
+            ? (rho / Math.Cos(lat)) - nFinal
+            : (r.Z / Math.Sin(lat)) - (nFinal * (1 - e2));
+        return (lat * 180.0 / Math.PI, height);
     }
 
     [Fact]

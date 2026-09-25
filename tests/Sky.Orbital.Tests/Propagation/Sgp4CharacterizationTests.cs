@@ -16,7 +16,9 @@ public class Sgp4CharacterizationTests
         // exactly the time derivative of its position. For this ISS element set over 7 days the gap
         // peaks at 2.24e-5 km/s (22 mm/s), identical in python-sgp4 2.25 and 2.27
         // (pure Python and compiled C++). Range rate inherits this.
-        // A unit or scaling error in the wrapper would break the bound by orders of magnitude.
+        // A velocity scaling error in the wrapper (km/min for km/s) would break the bound by orders of
+        // magnitude. Other unit errors keep position and velocity consistent, so the Vallado
+        // verification catches those instead.
         var iss = TestElements.Iss20260924;
         var propagator = Sgp4Propagator.Create(iss);
         var random = new Random(42);

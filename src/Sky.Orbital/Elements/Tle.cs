@@ -64,6 +64,11 @@ public static class Tle
 
         // TLE convention: years 57-99 are 1957-1999, years 00-56 are 2000-2056.
         int year = twoDigitYear < 57 ? 2000 + twoDigitYear : 1900 + twoDigitYear;
+        if (dayOfYear < 1.0 || dayOfYear >= (DateTime.IsLeapYear(year) ? 367.0 : 366.0))
+        {
+            throw new FormatException($"TLE epoch day {dayOfYear} is outside year {year}.");
+        }
+
         long ticks = (long)Math.Round((dayOfYear - 1.0) * TimeSpan.TicksPerDay);
         return new DateTimeOffset(year, 1, 1, 0, 0, 0, TimeSpan.Zero).AddTicks(ticks);
     }
@@ -79,7 +84,9 @@ public static class Tle
         char mantissaSign = SignOf(field[0], name);
         char exponentSign = SignOf(field[6], name);
         string text = $"{mantissaSign}0.{field.Substring(1, 5)}e{exponentSign}{field[7]}";
-        return ParseDouble(text, name);
+        return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value)
+            ? value
+            : throw new FormatException($"TLE {name} '{field}' is not a number.");
     }
 
     private static char SignOf(char c, string name) => c switch
@@ -101,8 +108,11 @@ public static class Tle
             : throw new FormatException($"TLE {name} '{text}' is not a whole number.");
     }
 
+    /// <summary>A plain decimal: sign, digits, point. No exponents, no NaN or Infinity.</summary>
     private static double ParseDouble(string text, string name) =>
-        double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+        double.TryParse(text.Trim(), PlainDecimal, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value)
             ? value
             : throw new FormatException($"TLE {name} '{text}' is not a number.");
+
+    private const NumberStyles PlainDecimal = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint;
 }

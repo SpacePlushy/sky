@@ -112,6 +112,45 @@ public class Sgp4VerificationTests
     }
 
     [Fact]
+    public void Rejects_elements_that_are_not_finite()
+    {
+        // SGP4's range checks are comparisons, which are all false for NaN, so a NaN element would
+        // otherwise produce a "successful" NaN state.
+        var iss = TestElements.Iss20260924;
+
+        Assert.Throws<ArgumentException>(() => Sgp4Propagator.Create(iss with { Inclination = double.NaN }));
+        Assert.Throws<ArgumentException>(() => Sgp4Propagator.Create(iss with { MeanMotion = double.PositiveInfinity }));
+        Assert.Throws<ArgumentException>(() => Sgp4Propagator.Create(iss with { BStar = double.NaN }));
+    }
+
+    public static TheoryData<string> NearEarthRuns => new(ValladoVerificationData.Runs
+        .Where(r => r.CatalogNumber != 33334 && 1440.0 / Tle.Parse(r.Line1, r.Line2).MeanMotion < 225.0)
+        .Select(r => r.Key));
+
+    [Fact]
+    public void Nine_of_the_verification_runs_are_near_earth()
+    {
+        Assert.Equal(9, NearEarthRuns.Count);
+    }
+
+    [Theory]
+    [MemberData(nameof(NearEarthRuns))]
+    public void Improved_and_afspc_modes_agree_exactly_for_every_near_earth_verification_run(string key)
+    {
+        // The mode only changes deep-space terms (period of 225 minutes or more), so every near-Earth
+        // run must be bit-identical in both modes over its published schedule (assumption A2).
+        var run = ValladoVerificationData.Get(key);
+        var elements = Tle.Parse(run.Line1, run.Line2);
+        var improved = Sgp4Propagator.Create(elements, OperationMode.Improved);
+        var afspc = Sgp4Propagator.Create(elements, OperationMode.Afspc);
+
+        foreach (var reference in run.States)
+        {
+            Assert.Equal(improved.Propagate(reference.Minutes), afspc.Propagate(reference.Minutes));
+        }
+    }
+
+    [Fact]
     public void Improved_and_afspc_modes_agree_exactly_for_a_near_earth_orbit()
     {
         // The mode only changes deep-space terms, so the ISS must be unaffected (assumption A2).

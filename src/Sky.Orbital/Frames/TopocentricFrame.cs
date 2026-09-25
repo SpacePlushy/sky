@@ -33,6 +33,14 @@ public sealed class TopocentricFrame
         _up = new Vec3(cosLat * cosLon, cosLat * sinLon, sinLat);
     }
 
+    /// <summary>Maps an atan2 result in degrees, in [-180, 180], into [0, 360).</summary>
+    /// <remarks>A tiny negative angle becomes exactly 360.0 when shifted, because the sum rounds.</remarks>
+    internal static double NormalizeAzimuthDegrees(double degrees)
+    {
+        double azimuth = degrees < 0.0 ? degrees + 360.0 : degrees;
+        return azimuth >= 360.0 || azimuth == 0.0 ? 0.0 : azimuth; // also turns -0.0 into 0.0
+    }
+
     /// <summary>The observer's position.</summary>
     public Geodetic Observer { get; }
 
@@ -40,7 +48,8 @@ public sealed class TopocentricFrame
     /// <remarks>
     /// The observer is fixed to the Earth, so the satellite's Earth-fixed velocity is also its
     /// velocity relative to the observer. Elevation uses atan2 rather than asin so it keeps full
-    /// precision near the zenith. Azimuth is 0 when the satellite is exactly at the zenith.
+    /// precision near the zenith. At the zenith azimuth is undefined, and the value returned there
+    /// depends on rounding.
     /// </remarks>
     public LookAngles LookAt(EcefState satellite)
     {
@@ -52,18 +61,7 @@ public sealed class TopocentricFrame
         double range = lineOfSight.Length;
         double horizontal = Math.Sqrt((east * east) + (north * north));
         double elevation = Math.Atan2(up, horizontal) * RadiansToDegrees;
-        double azimuth = Math.Atan2(east, north) * RadiansToDegrees;
-        if (azimuth < 0.0)
-        {
-            azimuth += 360.0;
-        }
-
-        // A tiny negative angle becomes exactly 360.0 when shifted, because the sum rounds.
-        // Keep the documented range [0, 360).
-        if (azimuth >= 360.0)
-        {
-            azimuth = 0.0;
-        }
+        double azimuth = NormalizeAzimuthDegrees(Math.Atan2(east, north) * RadiansToDegrees);
 
         double rangeRate = lineOfSight.Dot(satellite.Velocity) / range;
         return new LookAngles(azimuth, elevation, range, rangeRate);

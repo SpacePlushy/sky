@@ -75,8 +75,13 @@ public static class Wgs84
 
         double latitude = 2.0 * Math.Atan2(z, d + hypotenuse);
         double height = (k + e2 - 1.0) / k * hypotenuse;
-        double longitude = Math.Atan2(y, x);
+        // atan2 returns -pi for y = -0.0 with x negative; the documented range is (-180, 180].
+        double longitudeDegrees = Math.Atan2(y, x) * RadiansToDegrees;
+        if (longitudeDegrees <= -180.0)
+        {
+            longitudeDegrees = 180.0;
+        }
 
-        return new Geodetic(latitude * RadiansToDegrees, longitude * RadiansToDegrees, height);
+        return new Geodetic(latitude * RadiansToDegrees, longitudeDegrees, height);
     }
 }

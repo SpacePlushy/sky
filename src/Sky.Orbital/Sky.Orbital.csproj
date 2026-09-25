@@ -4,4 +4,8 @@
     <ProjectReference Include="..\Sky.Sgp4\Sky.Sgp4.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sky.Orbital.Tests" />
+  </ItemGroup>
+
 </Project>
