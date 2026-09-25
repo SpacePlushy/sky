@@ -26,10 +26,10 @@ verification story must be strong enough to explain to a stranger.
 
 ## Milestones
 
-1. **Orbital core.** CelesTrak GP fetch (JSON/OMM) with local caching, SGP4
-   via an established library, TEME to ECEF to geodetic and topocentric
-   transforms, Vallado verification cases as xUnit tests, and a CLI that prints
-   the ISS position and next 5 passes.
+1. **Orbital core.** Done, in review. Plan: `docs/plans/milestone-1-proposal.md`.
+   CelesTrak GP fetch (JSON/OMM) with a policy-enforcing cache, Vallado's
+   reference SGP4 (ADR 0001), TEME to Earth-fixed to geodetic and topocentric,
+   and a CLI that prints the ISS position and next 5 passes (coarse, 10 s).
 2. **Pass prediction.** Rise, max elevation, and set with root-finding
    refinement. Visibility means satellite sunlit and sun below -6 degrees at
    the observer. Target accuracy is a few seconds against reference tools.
@@ -60,10 +60,26 @@ verification story must be strong enough to explain to a stranger.
 - **Internal times are UTC.** Convert to the observer's zone only at the edge
   (API response formatting or UI).
 - **No secrets in the repo.** No API keys or tokens in committed files.
+- **No network in tests.** Tests use recorded fixtures and fake clocks. Never
+  point a test, script, or experiment at live CelesTrak; the cache enforces its
+  2-hour rule, and repeated requests get the IP address firewalled.
 - **Observer privacy.** Committed config defaults to a public Phoenix
   landmark. Real coordinates go only in a gitignored `appsettings.Local.json`.
   The `.gitignore` also excludes `*.local.json` and `.env*`. Check
   `git status` before every commit.
+
+## Verification rules
+
+The owner's bar is that the math is correct, with no errors and no band-aid fixes.
+
+- Every math function gets a published reference test **and** invariant tests
+  over seeded random inputs (round trips, derivatives, symmetries).
+- Tolerances come from error analysis written in the test comment, decided
+  before the test first runs. Never loosen a tolerance to make a test pass.
+- When a test fails, find the root cause and measure it. If a reference source
+  is at fault, fix the comparison at its source and record the finding in
+  `docs/verification.md`.
+- Report measured worst cases, not just "within tolerance".
 
 ## Commands
 
@@ -74,10 +90,12 @@ dotnet build Sky.slnx                             # build everything
 dotnet test --solution Sky.slnx                   # run all tests
 dotnet format Sky.slnx --verify-no-changes        # lint; CI fails on any diff
 dotnet format Sky.slnx                            # fix formatting
+dotnet run --project src/Sky.Cli -- now           # ISS position now
+dotnet run --project src/Sky.Cli -- passes        # next 5 ISS passes
+uv run tools/reference/generate_skyfield_reference.py   # regenerate Skyfield data
 ```
 
-The CLI arrives later in Milestone 1. The API, web app, and `docker compose up`
-arrive in Milestone 3.
+The API, web app, and `docker compose up` arrive in Milestone 3.
 
 ## Repo layout
 
@@ -85,8 +103,14 @@ arrive in Milestone 3.
   possible. Do not edit its math. Formatting and analyzers skip it on purpose.
   See its `NOTICE.md`.
 - `src/Sky.Orbital` is pure math: no I/O, no network, no clock access.
-- `tests/*` mirror `src/*`. Reference data lives next to the tests that use it.
-- `docs/plans` holds approved milestone plans. `docs/adr` records decisions.
+- `src/Sky.CelesTrak` is OMM parsing, the HTTP client, and the policy cache
+  (ADR 0002).
+- `src/Sky.Cli` is the `sky` command-line tool and its settings.
+- `tests/*` mirror `src/*`. Reference data lives next to the tests that use it,
+  with provenance and checksums in a README beside it.
+- `tools/reference` generates independent reference data with Skyfield.
+- `docs/verification.md` is the verification record. `docs/plans` holds
+  approved milestone plans. `docs/adr` records decisions.
 
 ## Build settings
 
