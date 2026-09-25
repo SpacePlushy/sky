@@ -5,6 +5,7 @@ using Sky.CelesTrak;
 using Sky.Orbital.Frames;
 using Sky.Orbital.Passes;
 using Sky.Orbital.Propagation;
+using Sky.Settings;
 
 namespace Sky.Cli;
 

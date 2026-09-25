@@ -3,6 +3,7 @@
     <Project Path="src/Sky.CelesTrak/Sky.CelesTrak.csproj" />
     <Project Path="src/Sky.Cli/Sky.Cli.csproj" />
     <Project Path="src/Sky.Orbital/Sky.Orbital.csproj" />
+    <Project Path="src/Sky.Settings/Sky.Settings.csproj" />
     <Project Path="src/Sky.Sgp4/Sky.Sgp4.csproj" />
   </Folder>
   <Folder Name="/tests/">

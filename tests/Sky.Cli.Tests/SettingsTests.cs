@@ -1,3 +1,4 @@
+using Sky.Settings;
 namespace Sky.Cli.Tests;
 
 public sealed class SettingsTests : IDisposable
@@ -104,5 +105,48 @@ public sealed class SettingsTests : IDisposable
         Assert.Equal("2026-07-15 05:00:00", Format.LocalTime(july, phoenix));
         Assert.Equal("2026-01-15 05:00:00", Format.LocalTime(january, denver));
         Assert.Equal("2026-07-15 06:00:00", Format.LocalTime(july, denver));
+    }
+
+    [Fact]
+    public void Offline_satellites_and_clock_start_are_read_and_default_sensibly()
+    {
+        var defaults = SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix);
+        Assert.False(defaults.Offline);
+        Assert.Equal([25544L], defaults.Satellites);
+        Assert.Null(defaults.ClockStartUtc);
+
+        _cli.WriteLocal("""{"CelesTrak":{"Offline":true},"Dashboard":{"Satellites":"25544, 48274,25544"},"Clock":{"StartUtc":"2026-09-24T04:00:00Z"}}""");
+        var settings = SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix);
+
+        Assert.True(settings.Offline);
+        Assert.Equal([25544L, 48274L], settings.Satellites);
+        Assert.Equal(new DateTimeOffset(2026, 9, 24, 4, 0, 0, TimeSpan.Zero), settings.ClockStartUtc);
+    }
+
+    [Theory]
+    [InlineData("""{"CelesTrak":{"Offline":"yes"}}""", "CelesTrak:Offline")]
+    [InlineData("""{"Dashboard":{"Satellites":"25544,ISS"}}""", "Dashboard:Satellites")]
+    [InlineData("""{"Dashboard":{"Satellites":"-5"}}""", "Dashboard:Satellites")]
+    [InlineData("""{"Clock":{"StartUtc":"2026-09-24T04:00:00"}}""", "Clock:StartUtc")]
+    [InlineData("""{"Clock":{"StartUtc":"2026-09-24T04:00:00-07:00"}}""", "Clock:StartUtc")]
+    [InlineData("""{"Clock":{"Start":"2026-09-24T04:00:00Z"}}""", "Clock:Start")]
+    public void Rejects_invalid_new_settings_and_names_them(string local, string setting)
+    {
+        _cli.WriteLocal(local);
+
+        var error = Assert.Throws<SettingsException>(() => SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix));
+        Assert.Contains(setting, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_started_clock_shows_the_start_instant_and_runs_at_real_speed()
+    {
+        var real = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(new DateTimeOffset(2030, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        var start = new DateTimeOffset(2026, 9, 24, 4, 0, 0, TimeSpan.Zero);
+        var clock = new StartedClock(real, start);
+
+        Assert.Equal(start, clock.GetUtcNow());
+        real.Advance(TimeSpan.FromSeconds(90));
+        Assert.Equal(start.AddSeconds(90), clock.GetUtcNow());
     }
 }
