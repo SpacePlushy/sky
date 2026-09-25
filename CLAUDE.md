@@ -38,8 +38,10 @@ verification story must be strong enough to explain to a stranger.
    Visibility means satellite sunlit (WGS-84 ellipsoid shadow, Meeus Sun) and
    sun below -6 degrees at the observer. Target accuracy is a few seconds
    against reference tools; Heavens-Above agrees within a second.
-3. **Dashboard.** Live map with ground track, telemetry panel, 7-day pass
-   table, polar sky plot. Dark mission-control look, mobile-friendly.
+3. **Dashboard.** Built, in review. Plan: `docs/plans/milestone-3-proposal.md`.
+   Live map with ground track, telemetry panel, 7-day pass table, polar sky
+   plot. Dark mission-control look, mobile-friendly. The Docker image never
+   contacts CelesTrak (ADR 0004).
 4. **Alerts and polish.** Optional notifications, hiring-manager README,
    Playwright E2E tests.
 
@@ -103,7 +105,18 @@ uv run tools/reference/generate_skyfield_reference.py              # regenerate 
 uv run tools/reference/generate_skyfield_visibility_reference.py   # Sun, shadow, visibility (downloads DE421 once)
 ```
 
-The API, web app, and `docker compose up` arrive in Milestone 3.
+The dashboard:
+
+```bash
+docker compose up --build                         # offline demo on http://localhost:8080
+dotnet run --project src/Sky.Api --urls http://localhost:5080   # the API (reads the CLI's settings)
+cd web && npm ci && npm run dev                   # the web app, proxying /api to :5080
+cd web && npm run typecheck && npm run lint && npm test && npm run build
+```
+
+Never run the API or the CLI online in tests, screenshots, or experiments: use
+`SKY_CelesTrak__Offline=true` with `deploy/demo-cache` and
+`SKY_Clock__StartUtc=2026-09-24T04:00:00Z` (see `web/README.md`).
 
 ## Repo layout
 
@@ -115,7 +128,10 @@ The API, web app, and `docker compose up` arrive in Milestone 3.
   and `Passes` the pass finder and visibility.
 - `src/Sky.CelesTrak` is OMM parsing, the HTTP client, and the policy cache
   (ADR 0002).
-- `src/Sky.Cli` is the `sky` command-line tool and its settings.
+- `src/Sky.Cli` is the `sky` command-line tool; `src/Sky.Settings` its
+  settings, shared with the API.
+- `src/Sky.Api` is the dashboard's ASP.NET Core API; `web/` the TypeScript
+  dashboard; `deploy/demo-cache` the recorded data the Docker image serves.
 - `tests/*` mirror `src/*`. Reference data lives next to the tests that use it,
   with provenance and checksums in a README beside it.
 - `tools/reference` generates independent reference data with Skyfield.
