@@ -22,15 +22,16 @@ internal static class SkyCli
             Description = "Minimum elevation in degrees, from 0 to below 90. Defaults to the Passes:MinimumElevationDegrees setting.",
             CustomParser = ParseElevation,
         };
+        var visibleOnly = new Option<bool>("--visible") { Description = "List only passes with a visible part: satellite sunlit, Sun below -6° at the observer." };
         var group = new Argument<string>("group") { Description = "CelesTrak group, such as stations." };
 
         var now = new Command("now", "Where the satellite is now, as seen from the observer.") { satellite, refresh };
         now.SetAction((parse, token) => ExecuteAsync(environment, context =>
             NowAsync(context, parse.GetValue(satellite), parse.GetValue(refresh), token)));
 
-        var passes = new Command("passes", "The satellite's next passes over the observer.") { satellite, refresh, count, days, minimumElevation };
+        var passes = new Command("passes", "The satellite's next passes over the observer, and which parts of them can be seen.") { satellite, refresh, count, days, minimumElevation, visibleOnly };
         passes.SetAction((parse, token) => ExecuteAsync(environment, context =>
-            PassesAsync(context, parse.GetValue(satellite), parse.GetValue(refresh), parse.GetValue(count), parse.GetValue(days), parse.GetValue(minimumElevation), token)));
+            PassesAsync(context, new PassesRequest(parse.GetValue(satellite), parse.GetValue(refresh), parse.GetValue(count), parse.GetValue(days), parse.GetValue(minimumElevation), parse.GetValue(visibleOnly)), token)));
 
         var unblock = new Command("unblock", "Allow requests to a CelesTrak group again, after checking why it was blocked.") { group };
         unblock.SetAction((parse, _) => ExecuteAsync(environment, context =>
@@ -50,7 +51,7 @@ internal static class SkyCli
             return Task.FromResult(0);
         }));
 
-        var root = new RootCommand("Sky: satellite position and passes over an observer (Milestone 1).") { now, passes, unblock };
+        var root = new RootCommand("Sky: satellite position, passes, and visibility over an observer.") { now, passes, unblock };
         return await root.Parse(args).InvokeAsync(
             new InvocationConfiguration { Output = environment.Out, Error = environment.Error },
             cancellationToken).ConfigureAwait(false);
@@ -109,98 +110,139 @@ internal static class SkyCli
         Geodetic subpoint = Wgs84.FromEcef(ecef.Position);
         var frame = new TopocentricFrame(settings.Observer);
         LookAngles look = frame.LookAt(ecef);
-        DateTimeOffset searchStart = Format.FloorToSecond(t);
-        PassSearchResult upcoming = CoarsePassFinder.Find(propagator, frame, searchStart, searchStart.AddDays(7), settings.MinimumElevationDegrees);
-        SatellitePass? next = upcoming.Passes.Count > 0 ? upcoming.Passes[0] : null;
+        bool sunlit = Visibility.IsSunlit(propagator, t);
+        double sunElevation = Visibility.SunElevationDegrees(frame, t);
+        PassSearchResult upcoming = PassFinder.Find(propagator, frame, t, t.AddDays(7), settings.MinimumElevationDegrees);
+        SatellitePass? current = upcoming.Passes.FirstOrDefault(p => p.Rise.Time <= t && t <= p.Set.Time);
+        SatellitePass? next = upcoming.Passes.FirstOrDefault(p => p.Rise.Time > t);
+        (SatellitePass Pass, VisibleWindow Window)? nextVisible = upcoming.Passes
+            .SelectMany(p => Visibility.Windows(p, propagator, frame).Select(w => (Pass: p, Window: w)))
+            .Where(v => v.Window.End.Time > t)
+            .Select(v => ((SatellitePass Pass, VisibleWindow Window)?)v)
+            .FirstOrDefault();
+        TimeZoneInfo zone = settings.TimeZone;
 
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}").ConfigureAwait(false);
-        await o.WriteLineAsync($"  time        {Format.LocalTime(t, settings.TimeZone)} {settings.TimeZone.Id} ({Format.Utc(t)} UTC)").ConfigureAwait(false);
+        await o.WriteLineAsync($"  time        {Format.LocalTime(t, zone)} {zone.Id} ({Format.Utc(t)} UTC)").ConfigureAwait(false);
         await o.WriteLineAsync($"  elements    epoch {Format.Utc(record.Elements.Epoch)} UTC, {Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old").ConfigureAwait(false);
         await o.WriteLineAsync($"  latitude    {Format.Number(subpoint.LatitudeDegrees, 4)}°").ConfigureAwait(false);
         await o.WriteLineAsync($"  longitude   {Format.Number(subpoint.LongitudeDegrees, 4)}°").ConfigureAwait(false);
         await o.WriteLineAsync($"  altitude    {Format.Number(subpoint.HeightKm, 1)} km").ConfigureAwait(false);
         await o.WriteLineAsync($"  speed       {Format.Number(result.State.Velocity.Length, 3)} km/s (inertial)").ConfigureAwait(false);
+        await o.WriteLineAsync($"  sunlight    {(sunlit ? "sunlit" : "in the Earth's shadow")}").ConfigureAwait(false);
         await o.WriteLineAsync($"From {settings.ObserverName} ({Format.Number(settings.Observer.LatitudeDegrees, 4)}°, {Format.Number(settings.Observer.LongitudeDegrees, 4)}°, {Format.Number(settings.Observer.HeightKm * 1000, 0)} m)").ConfigureAwait(false);
         await o.WriteLineAsync($"  azimuth     {Format.Number(look.AzimuthDegrees, 2)}°").ConfigureAwait(false);
         await o.WriteLineAsync($"  elevation   {Format.Number(look.ElevationDegrees, 2)}°{(look.ElevationDegrees < 0 ? " (below the horizon)" : string.Empty)}").ConfigureAwait(false);
         await o.WriteLineAsync($"  range       {Format.Number(look.RangeKm, 2)} km").ConfigureAwait(false);
         await o.WriteLineAsync($"  range rate  {Format.Number(look.RangeRateKmPerSecond, 3)} km/s").ConfigureAwait(false);
-        if (look.ElevationDegrees >= settings.MinimumElevationDegrees)
+        await o.WriteLineAsync($"  sun         {Format.Number(sunElevation, 1)}° ({(sunElevation < Visibility.TwilightSunElevationDegrees ? "dark enough to see satellites" : "too bright to see satellites")})").ConfigureAwait(false);
+        if (current is not null)
         {
-            // The pass finder only reports passes that rise inside its window, so say so directly.
-            await o.WriteLineAsync($"  pass        in progress now, above {Format.Degrees(settings.MinimumElevationDegrees)}°").ConfigureAwait(false);
+            await o.WriteLineAsync($"  pass        in progress: rose {Format.LocalClock(Format.RoundToSecond(current.Rise.Time), zone)}, peak {Format.Number(current.Culmination.ElevationDegrees, 1)}° at {Format.LocalClock(Format.RoundToSecond(current.Culmination.Time), zone)}, sets {Format.LocalClock(Format.RoundToSecond(current.Set.Time), zone)}").ConfigureAwait(false);
         }
-        else if (next is not null)
+        else if (upcoming.AboveMinimumAtStartSince is not null)
         {
-            await o.WriteLineAsync($"  next pass   rises {Format.LocalTime(next.Rise.Time, settings.TimeZone)} ({Format.Countdown(next.Rise.Time - t)}), peaks at {Format.Number(next.Culmination.ElevationDegrees, 1)}°").ConfigureAwait(false);
+            await o.WriteLineAsync($"  pass        above {Format.Degrees(settings.MinimumElevationDegrees)}° for more than a day; no rise or set to report").ConfigureAwait(false);
         }
-        else
+
+        if (next is not null)
         {
-            await o.WriteLineAsync(Format.SearchStop(upcoming, settings.TimeZone) is { } stop
+            await o.WriteLineAsync($"  next pass   rises {Format.LocalTime(Format.RoundToSecond(next.Rise.Time), zone)} ({Format.Countdown(next.Rise.Time - t)}), peaks at {Format.Number(next.Culmination.ElevationDegrees, 1)}°").ConfigureAwait(false);
+        }
+        else if (current is null)
+        {
+            await o.WriteLineAsync(Format.SearchStop(upcoming, zone) is { } stop
                 ? $"  next pass   none found: {stop}"
                 : $"  next pass   none above {Format.Degrees(settings.MinimumElevationDegrees)}° in the next 7 days").ConfigureAwait(false);
         }
 
+        await o.WriteLineAsync(nextVisible is { } v
+            ? $"  visible     {(v.Window.Start.Time <= t ? "now" : Format.LocalTime(Format.RoundToSecond(v.Window.Start.Time), zone))} until {Format.LocalClock(Format.RoundToSecond(v.Window.End.Time), zone)}, up to {Format.Number(v.Window.Highest.ElevationDegrees, 1)}°"
+            : "  visible     no visible pass in the next 7 days").ConfigureAwait(false);
+
         return 0;
     }
 
-    private static async Task<int> PassesAsync(
-        CommandContext context, long catalogNumber, bool refresh, int count, int days, double? minimumElevation, CancellationToken token)
+    private static async Task<int> PassesAsync(CommandContext context, PassesRequest request, CancellationToken token)
     {
         var (env, settings, _) = context;
-        if (count < 1 || days < 1 || days > 30)
+        if (request.Count < 1 || request.Days < 1 || request.Days > 30)
         {
             await env.Error.WriteLineAsync("--count must be at least 1, and --days from 1 to 30.").ConfigureAwait(false);
             return 1;
         }
 
-        GpRecord? record = await FindAsync(context, catalogNumber, refresh, token).ConfigureAwait(false);
+        GpRecord? record = await FindAsync(context, request.Satellite, request.Refresh, token).ConfigureAwait(false);
         if (record is null || !TryCreatePropagator(context, record, out Sgp4Propagator? propagator))
         {
             return 1;
         }
 
-        double minimum = minimumElevation ?? settings.MinimumElevationDegrees;
+        double minimum = request.MinimumElevation ?? settings.MinimumElevationDegrees;
         DateTimeOffset t = env.Time.GetUtcNow();
-        // Start on the whole second at or before now, so the 10 s rise and set samples print exactly.
-        DateTimeOffset searchStart = Format.FloorToSecond(t);
-        PassSearchResult search = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), searchStart, searchStart.AddDays(days), minimum);
-        var found = search.Passes.Take(count).ToList();
+        DateTimeOffset end = t.AddDays(request.Days);
+        var frame = new TopocentricFrame(settings.Observer);
+        PassSearchResult search = PassFinder.Find(propagator, frame, t, end, minimum);
+        var rows = search.Passes
+            .Select(p => (Pass: p, Windows: Visibility.Windows(p, propagator, frame)))
+            .Where(r => !request.VisibleOnly || r.Windows.Count > 0)
+            .Take(request.Count)
+            .ToList();
         TimeZoneInfo zone = settings.TimeZone;
 
         TextWriter o = env.Out;
-        await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
-        string offsetLabel = Format.OffsetLabel(zone, searchStart, searchStart.AddDays(days));
+        await o.WriteLineAsync($"{record.Name}  NORAD {request.Satellite}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
+        string offsetLabel = Format.OffsetLabel(zone, t, end);
         bool offsetChanges = offsetLabel.Contains("daylight saving", StringComparison.Ordinal);
-        await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Degrees(minimum)}° in the next {days} days. Times in {zone.Id} ({offsetLabel}{(offsetChanges ? "; each time shows its offset" : string.Empty)}).").ConfigureAwait(false);
-        string peakBound = found.Count > 0
-            ? $"{Format.BoundDegrees(found.Max(p => p.PeakElevationUncertaintyDegrees))}°"
-            : "a per-pass bound";
-        await o.WriteLineAsync($"Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and {peakBound}. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
+        string which = request.VisibleOnly ? "Visible passes" : "Passes";
+        await o.WriteLineAsync($"{which} over {settings.ObserverName} above {Format.Degrees(minimum)}° in the next {request.Days} days. Times in {zone.Id} ({offsetLabel}{(offsetChanges ? "; each time shows its offset" : string.Empty)}).").ConfigureAwait(false);
+        string peakBound = rows.Count > 0 ? $"{Format.BoundDegrees(rows.Max(r => r.Pass.PeakElevationUncertaintyDegrees))}°" : "a per-pass bound";
+        await o.WriteLineAsync($"Rise, peak, and set are found to 1 ms and printed to the nearest second; peak elevation within {peakBound}. Geometric elevation, no refraction.").ConfigureAwait(false);
+        await o.WriteLineAsync("Visible: the satellite is sunlit and the Sun is below -6° at the observer.").ConfigureAwait(false);
         await o.WriteLineAsync().ConfigureAwait(false);
-        await o.WriteLineAsync("  Rise                 Az       Peak        El      Az       Set       Az").ConfigureAwait(false);
-        foreach (SatellitePass pass in found)
+        await o.WriteLineAsync("  Rise                 Az       Peak       El      Az       Set       Az      Visible").ConfigureAwait(false);
+        foreach (var (pass, windows) in rows)
         {
             // Where daylight saving changes the offset inside the window, a wall-clock time alone can
             // be ambiguous (the repeated hour), so each time then carries its offset.
+            DateTimeOffset rise = Format.RoundToSecond(pass.Rise.Time);
+            DateTimeOffset peak = Format.RoundToSecond(pass.Culmination.Time);
+            DateTimeOffset set = Format.RoundToSecond(pass.Set.Time);
+            string visible = windows.Count == 0
+                ? "no"
+                : string.Join("; ", windows.Select(w =>
+                    $"{Format.LocalClock(Format.RoundToSecond(w.Start.Time), zone)}{Offset(w.Start.Time)}-{Format.LocalClock(Format.RoundToSecond(w.End.Time), zone)}{Offset(w.End.Time)} up to {Format.Number(w.Highest.ElevationDegrees, 1)}°{Ending(w.EndsBecause)}"));
             await o.WriteLineAsync(
-                $"  {Format.LocalTime(pass.Rise.Time, zone)}{Offset(pass.Rise.Time)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
-                $"{Format.LocalClockTenths(pass.Culmination.Time, zone)}{Offset(pass.Culmination.Time)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
-                $"{Format.LocalClock(pass.Set.Time, zone)}{Offset(pass.Set.Time)}  {Azimuth(pass.Set.AzimuthDegrees)}").ConfigureAwait(false);
+                $"  {Format.LocalTime(rise, zone)}{Offset(rise)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
+                $"{Format.LocalClock(peak, zone)}{Offset(peak)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
+                $"{Format.LocalClock(set, zone)}{Offset(set)}  {Azimuth(pass.Set.AzimuthDegrees)}  {visible}{(pass.Rise.Time < t ? "  (in progress)" : string.Empty)}").ConfigureAwait(false);
         }
 
-        if (found.Count < count)
+        if (search.AboveMinimumAtStartSince is not null && !search.Passes.Any(p => p.Rise.Time <= t))
         {
+            await o.WriteLineAsync($"  NORAD {request.Satellite} has been above {Format.Degrees(minimum)}° for more than a day, so that pass has no rise or set to list.").ConfigureAwait(false);
+        }
+
+        if (rows.Count < request.Count)
+        {
+            string found = $"Only {rows.Count} of {request.Count} {(request.VisibleOnly ? "visible " : string.Empty)}passes found";
             await o.WriteLineAsync(Format.SearchStop(search, zone) is { } stop
-                ? $"  Only {found.Count} of {count} passes found. {stop}"
-                : $"  Only {found.Count} of {count} passes found in the next {days} days.").ConfigureAwait(false);
+                ? $"  {found}. {stop}"
+                : $"  {found} in the next {request.Days} days.").ConfigureAwait(false);
         }
 
         return 0;
 
         string Offset(DateTimeOffset instant) => offsetChanges ? Format.OffsetSuffix(instant, zone) : string.Empty;
     }
+
+    private static string Ending(VisibilityChange change) => change switch
+    {
+        VisibilityChange.EntersShadow => ", then into shadow",
+        VisibilityChange.SkyBrightens => ", then the sky brightens",
+        _ => string.Empty,
+    };
 
     private static string Azimuth(double degrees) => $"{Format.Number(degrees, 1),5}°";
 
@@ -257,4 +299,6 @@ internal static class SkyCli
     }
 
     private sealed record CommandContext(CliEnvironment Environment, SkySettings Settings, GpCache Cache);
+
+    private sealed record PassesRequest(long Satellite, bool Refresh, int Count, int Days, double? MinimumElevation, bool VisibleOnly);
 }

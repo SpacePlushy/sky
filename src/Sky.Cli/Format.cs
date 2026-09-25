@@ -14,16 +14,17 @@ internal static class Format
     public static string LocalClock(DateTimeOffset instant, TimeZoneInfo zone) =>
         TimeZoneInfo.ConvertTime(instant, zone).ToString("HH:mm:ss", CultureInfo.InvariantCulture);
 
-    /// <summary>Clock time with tenths of a second, in a zone.</summary>
-    public static string LocalClockTenths(DateTimeOffset instant, TimeZoneInfo zone) =>
-        TimeZoneInfo.ConvertTime(instant, zone).ToString("HH:mm:ss.f", CultureInfo.InvariantCulture);
-
     /// <summary>
-    /// The whole second at or before an instant. Searching from there makes every sampled time a
-    /// whole second, so it prints exactly, and cannot skip a pass that rises later in this second.
+    /// The nearest whole second, halves rounding up. Pass times are found to 1 ms, so the printed
+    /// second is within half a second of the event.
     /// </summary>
-    public static DateTimeOffset FloorToSecond(DateTimeOffset instant) =>
-        instant.AddTicks(-(instant.Ticks % TimeSpan.TicksPerSecond));
+    public static DateTimeOffset RoundToSecond(DateTimeOffset instant)
+    {
+        long remainder = instant.Ticks % TimeSpan.TicksPerSecond;
+        return remainder >= TimeSpan.TicksPerSecond / 2
+            ? instant.AddTicks(TimeSpan.TicksPerSecond - remainder)
+            : instant.AddTicks(-remainder);
+    }
 
     /// <summary>The UTC offset suffix for an instant in a zone, such as -06:00.</summary>
     public static string OffsetSuffix(DateTimeOffset instant, TimeZoneInfo zone)

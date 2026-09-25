@@ -29,18 +29,21 @@ public sealed partial class CommandTests : IDisposable
         Assert.Contains("ISS (ZARYA)", output, StringComparison.Ordinal);
         Assert.Contains("America/Phoenix", output, StringComparison.Ordinal);
 
-        var rises = PassRow().Matches(output).Select(m => DateTime.ParseExact(
-            m.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).ToList();
-        Assert.Equal(5, rises.Count);
+        var rows = PassRow().Matches(output).ToList();
+        Assert.Equal(5, rows.Count);
 
-        // Printed times are Phoenix local. Rises fall on the 10 s grid from the clock time (whole
-        // seconds), so each printed rise is 0 to 10 s after Skyfield's refined crossing.
-        var reference = Skyfield.GetProperty("passes").EnumerateArray().Take(5).ToList();
-        foreach (var (printedLocal, pass) in rises.Zip(reference))
+        // At 04:00 UTC a pass is already up (it rose a few minutes earlier), so it comes first and
+        // says so. Skyfield's search started at 04:00 and does not list it.
+        Assert.Contains("(in progress)", rows[0].Value, StringComparison.Ordinal);
+        Assert.True(ToUtc(Parse(rows[0].Groups["rise"].Value)) < Now);
+
+        // The rest are Skyfield's first four passes. Times are found to 1 ms and printed to the
+        // nearest second in Phoenix time, so each is within half a second (plus 1 ms) of Skyfield's.
+        var reference = Skyfield.GetProperty("passes").EnumerateArray().Take(4).ToList();
+        foreach (var (row, pass) in rows.Skip(1).Zip(reference))
         {
-            var printedUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(printedLocal, Phoenix), TimeSpan.Zero);
-            var skyfieldRise = pass.GetProperty("rise").GetProperty("utc").GetDateTimeOffset();
-            Assert.InRange((printedUtc - skyfieldRise).TotalSeconds, -0.001, 10.001);
+            AssertPrintedTimes(row, pass);
+            Assert.DoesNotContain("(in progress)", row.Value, StringComparison.Ordinal);
         }
     }
 
@@ -78,56 +81,96 @@ public sealed partial class CommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Passes_states_the_largest_peak_uncertainty_among_the_listed_passes()
+    public async Task Passes_states_its_precision_and_what_visible_means()
     {
         await _cli.RunAsync("passes");
 
-        // The five listed passes carry uncertainties from 0.0178 to 0.0456 degrees; the largest,
-        // from the 65.2 degree pass, prints rounded up to three decimals. CoarsePassFinderTests
-        // verifies the uncertainty itself against exact geometry.
-        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.046°", _cli.Out.ToString(), StringComparison.Ordinal);
+        // Every listed pass's peak uncertainty is far below 0.001 degrees (PassFinderTests checks the
+        // uncertainty against exact geometry); rounded up to three decimals it prints as 0.001.
+        string output = _cli.Out.ToString();
+        Assert.Contains("found to 1 ms and printed to the nearest second; peak elevation within 0.001°", output, StringComparison.Ordinal);
+        Assert.Contains("Visible: the satellite is sunlit and the Sun is below -6° at the observer.", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Printed_times_keep_their_stated_precision_from_a_fractional_clock_time()
+    public async Task Visible_lists_only_passes_that_can_be_seen()
     {
-        // The search starts on the whole second at or before the clock, so rise and set print
-        // exactly, and peaks print to tenths. The clock's fraction is chosen so the first pass
-        // rises 0.2 s after a grid point: printing unrounded times would show that pass rising
-        // before the true crossing, and rounding up instead would shift every rise by a second.
-        _cli.Clock.SetUtcNow(Now.AddTicks(20_332_000)); // 04:00:02.332
+        int exit = await _cli.RunAsync("passes", "--visible", "--count", "3");
+
+        Assert.Equal(0, exit);
+        string output = _cli.Out.ToString();
+        Assert.Contains("Visible passes over", output, StringComparison.Ordinal);
+        var rows = PassRow().Matches(output).ToList();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, r => Assert.NotEqual("no", r.Groups["visible"].Value.Trim()));
+        Assert.All(rows, r => Assert.Matches(@"^\d{2}:\d{2}:\d{2}-\d{2}:\d{2}:\d{2} up to", r.Groups["visible"].Value));
+    }
+
+    [Fact]
+    public async Task Printed_times_round_to_the_nearest_second_from_a_fractional_clock_time()
+    {
+        // A clock with a fraction of a second must not shift the printed times: they come from
+        // root-finding, not from a grid tied to the clock. Skyfield's first pass rises at
+        // 05:32:22.132, so it prints as 22:32:22 Phoenix time, not 22:32:23.
+        _cli.Clock.SetUtcNow(Now.AddHours(1).AddTicks(20_332_000)); // 05:00:02.332
 
         await _cli.RunAsync("passes");
 
         var reference = Skyfield.GetProperty("passes").EnumerateArray().Take(5).ToList();
         var rows = PassRow().Matches(_cli.Out.ToString()).ToList();
         Assert.Equal(5, rows.Count);
+        Assert.Equal("2026-09-23 22:32:22", rows[0].Groups["rise"].Value);
         foreach (var (row, pass) in rows.Zip(reference))
         {
-            var riseUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
-            Assert.InRange((riseUtc - pass.GetProperty("rise").GetProperty("utc").GetDateTimeOffset()).TotalSeconds, -0.001, 10.001);
-            Assert.Equal(0, (riseUtc - Now.AddSeconds(2)).Ticks % TimeSpan.FromSeconds(10).Ticks); // on the 04:00:02 grid
-
-            var peakClock = TimeSpan.ParseExact(row.Groups["peak"].Value, @"hh\:mm\:ss\.f", CultureInfo.InvariantCulture);
-            var peakUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture) + peakClock);
-            Assert.InRange((peakUtc - pass.GetProperty("culmination").GetProperty("utc").GetDateTimeOffset()).TotalSeconds, -0.101, 0.101);
+            AssertPrintedTimes(row, pass);
         }
     }
+
+    private static void AssertPrintedTimes(Match row, JsonElement pass)
+    {
+        var rise = ToUtc(Parse(row.Groups["rise"].Value));
+        string date = row.Groups["rise"].Value[..10];
+        var peak = ToUtc(Parse($"{date} {row.Groups["peak"].Value}"));
+        var set = ToUtc(Parse($"{date} {row.Groups["set"].Value}"));
+        Assert.InRange((rise - Utc(pass, "rise")).TotalSeconds, -0.501, 0.501);
+        Assert.InRange((peak - Utc(pass, "culmination")).TotalSeconds, -0.501, 0.501);
+        Assert.InRange((set - Utc(pass, "set")).TotalSeconds, -0.501, 0.501);
+    }
+
+    private static DateTimeOffset Utc(JsonElement pass, string name) =>
+        pass.GetProperty(name).GetProperty("utc").GetDateTimeOffset();
+
+    private static DateTime Parse(string local) =>
+        DateTime.ParseExact(local, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
     private static DateTimeOffset ToUtc(DateTime phoenixLocal) =>
         new(TimeZoneInfo.ConvertTimeToUtc(phoenixLocal, Phoenix), TimeSpan.Zero);
 
     [Fact]
-    public async Task Now_during_a_pass_says_the_pass_is_in_progress()
+    public async Task Now_during_a_pass_says_the_pass_is_in_progress_with_its_real_times()
     {
-        // Set the clock to the peak of Skyfield's first pass.
+        // Set the clock to the peak of Skyfield's first pass: rise 05:32:22.132, set 05:36:33.470 UTC.
         var peak = Skyfield.GetProperty("passes")[0].GetProperty("culmination").GetProperty("utc").GetDateTimeOffset();
         _cli.Clock.SetUtcNow(peak);
 
         int exit = await _cli.RunAsync("now");
 
         Assert.Equal(0, exit);
-        Assert.Contains("in progress now", _cli.Out.ToString(), StringComparison.Ordinal);
+        string output = _cli.Out.ToString();
+        Assert.Contains("pass        in progress: rose 22:32:22,", output, StringComparison.Ordinal);
+        Assert.Contains(", sets 22:36:33", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Now_says_whether_the_satellite_is_sunlit_and_the_sky_dark()
+    {
+        // 04:00 UTC is 21:00 in Phoenix, well after civil dusk.
+        await _cli.RunAsync("now");
+
+        string output = _cli.Out.ToString();
+        Assert.Matches(@"sunlight    (sunlit|in the Earth's shadow)", output);
+        Assert.Contains("(dark enough to see satellites)", output, StringComparison.Ordinal);
+        Assert.Matches(@"visible     (now|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) until \d{2}:\d{2}:\d{2}, up to", output);
     }
 
     [Fact]
@@ -145,12 +188,12 @@ public sealed partial class CommandTests : IDisposable
     public async Task Now_reports_a_pass_that_rises_within_the_current_second()
     {
         // Skyfield's first pass rises at 05:32:22.132. At 05:32:22.050 the ISS is still below 10
-        // degrees, so this pass is the next one, rising on the 10 s grid from 05:32:22.
+        // degrees, so this pass is the next one, rising at 22:32:22 Phoenix time to the second.
         _cli.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 24, 5, 32, 22, TimeSpan.Zero).AddMilliseconds(50));
 
         await _cli.RunAsync("now");
 
-        Assert.Contains("next pass   rises 2026-09-23 22:32:32", _cli.Out.ToString(), StringComparison.Ordinal);
+        Assert.Contains("next pass   rises 2026-09-23 22:32:22", _cli.Out.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -323,7 +366,7 @@ public sealed partial class CommandTests : IDisposable
         return double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
     }
 
-    [GeneratedRegex(@"^\s*(?<rise>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\S+\s+(?<peak>\d{2}:\d{2}:\d{2}\.\d)\s", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^\s*(?<rise>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\S+\s+(?<peak>\d{2}:\d{2}:\d{2})\s+\S+\s+\S+\s+(?<set>\d{2}:\d{2}:\d{2})\s+\S+\s+(?<visible>.+?)\s*$", RegexOptions.Multiline)]
     private static partial Regex PassRow();
 
     [GeneratedRegex(@"^\s*(?<date>\d{4}-\d{2}-\d{2}) (?<rise>\d{2}:\d{2}:\d{2})(?<riseOffset>[+-]\d{2}:\d{2})\s+\S+\s+\S+\s+\S+\s+\S+\s+(?<set>\d{2}:\d{2}:\d{2})(?<setOffset>[+-]\d{2}:\d{2})", RegexOptions.Multiline)]
