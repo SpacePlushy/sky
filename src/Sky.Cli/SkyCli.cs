@@ -141,25 +141,47 @@ internal static class SkyCli
         {
             await o.WriteLineAsync($"  pass        in progress: rose {Format.LocalClock(Format.RoundToSecond(current.Rise.Time), zone)}, peak {Format.Number(current.Culmination.ElevationDegrees, 1)}° at {Format.LocalClock(Format.RoundToSecond(current.Culmination.Time), zone)}, sets {Format.LocalClock(Format.RoundToSecond(current.Set.Time), zone)}").ConfigureAwait(false);
         }
-        else if (upcoming.AboveMinimumAtStartSince is not null)
+        bool upForDays = current is null && upcoming.AboveMinimumAtStartSince is not null;
+        if (upForDays)
         {
-            await o.WriteLineAsync($"  pass        above {Format.Degrees(settings.MinimumElevationDegrees)}° for more than a day; no rise or set to report").ConfigureAwait(false);
+            // Up for longer than the finder follows a pass, so there is no rise to report; the set may be.
+            await o.WriteLineAsync(upcoming.SetOfPassUpAtStart is { } setsAt
+                ? $"  pass        above {Format.Degrees(settings.MinimumElevationDegrees)}° for more than a day; sets {Format.LocalTime(Format.RoundToSecond(setsAt.Time), zone)}"
+                : $"  pass        above {Format.Degrees(settings.MinimumElevationDegrees)}° for more than a day; no rise or set to report").ConfigureAwait(false);
         }
 
+        string? stop = Format.SearchStop(upcoming, zone);
         if (next is not null)
         {
             await o.WriteLineAsync($"  next pass   rises {Format.LocalTime(Format.RoundToSecond(next.Rise.Time), zone)} ({Format.Countdown(next.Rise.Time - t)}), peaks at {Format.Number(next.Culmination.ElevationDegrees, 1)}°").ConfigureAwait(false);
         }
-        else if (current is null)
+        else if (upcoming.RiseOfPassUpAtEnd is { } longRise && longRise.Time > t)
         {
-            await o.WriteLineAsync(Format.SearchStop(upcoming, zone) is { } stop
+            await o.WriteLineAsync($"  next pass   rises {Format.LocalTime(Format.RoundToSecond(longRise.Time), zone)} ({Format.Countdown(longRise.Time - t)}) and stays above {Format.Degrees(settings.MinimumElevationDegrees)}° for more than a day").ConfigureAwait(false);
+        }
+        else if (current is null && !upForDays)
+        {
+            await o.WriteLineAsync(stop is not null
                 ? $"  next pass   none found: {stop}"
                 : $"  next pass   none above {Format.Degrees(settings.MinimumElevationDegrees)}° in the next 7 days").ConfigureAwait(false);
         }
 
-        await o.WriteLineAsync(nextVisible is { } v
+        if (stop is not null && next is not null)
+        {
+            await o.WriteLineAsync($"  search      {stop}").ConfigureAwait(false);
+        }
+
+        // Visible parts are computed for complete passes. For a satellite up for days, say whether
+        // it can be seen right now.
+        bool visibleNow = sunlit && sunElevation < Visibility.TwilightSunElevationDegrees && look.ElevationDegrees >= settings.MinimumElevationDegrees;
+        string visibleLine = nextVisible is { } v
             ? $"  visible     {(v.Window.Start.Time <= t ? "now" : Format.LocalTime(Format.RoundToSecond(v.Window.Start.Time), zone))} until {Format.LocalClock(Format.RoundToSecond(v.Window.End.Time), zone)}, up to {Format.Number(v.Window.Highest.ElevationDegrees, 1)}°"
-            : "  visible     no visible pass in the next 7 days").ConfigureAwait(false);
+            : upForDays
+                ? $"  visible     {(visibleNow ? "now" : "not now")} (up for more than a day, so visible parts are not predicted)"
+                : stop is not null
+                    ? $"  visible     none found: {stop}"
+                    : "  visible     no visible pass in the next 7 days";
+        await o.WriteLineAsync(visibleLine).ConfigureAwait(false);
 
         return 0;
     }
@@ -209,19 +231,32 @@ internal static class SkyCli
             DateTimeOffset rise = Format.RoundToSecond(pass.Rise.Time);
             DateTimeOffset peak = Format.RoundToSecond(pass.Culmination.Time);
             DateTimeOffset set = Format.RoundToSecond(pass.Set.Time);
+            // Each time is rounded once, and its clock and offset both come from the rounded instant,
+            // so a time near a daylight saving change cannot print with the other side's offset.
             string visible = windows.Count == 0
                 ? "no"
                 : string.Join("; ", windows.Select(w =>
-                    $"{Format.LocalClock(Format.RoundToSecond(w.Start.Time), zone)}{Offset(w.Start.Time)}-{Format.LocalClock(Format.RoundToSecond(w.End.Time), zone)}{Offset(w.End.Time)} up to {Format.Number(w.Highest.ElevationDegrees, 1)}°{Ending(w.EndsBecause)}"));
+                {
+                    DateTimeOffset from = Format.RoundToSecond(w.Start.Time);
+                    DateTimeOffset to = Format.RoundToSecond(w.End.Time);
+                    return $"{Format.LocalClock(from, zone)}{Offset(from)}-{Format.LocalClock(to, zone)}{Offset(to)} up to {Format.Number(w.Highest.ElevationDegrees, 1)}°{Ending(w.EndsBecause)}";
+                }));
             await o.WriteLineAsync(
                 $"  {Format.LocalTime(rise, zone)}{Offset(rise)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
                 $"{Format.LocalClock(peak, zone)}{Offset(peak)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
                 $"{Format.LocalClock(set, zone)}{Offset(set)}  {Azimuth(pass.Set.AzimuthDegrees)}  {visible}{(pass.Rise.Time < t ? "  (in progress)" : string.Empty)}").ConfigureAwait(false);
         }
 
-        if (search.AboveMinimumAtStartSince is not null && !search.Passes.Any(p => p.Rise.Time <= t))
+        if (search.AboveMinimumAtStartSince is not null)
         {
-            await o.WriteLineAsync($"  NORAD {request.Satellite} has been above {Format.Degrees(minimum)}° for more than a day, so that pass has no rise or set to list.").ConfigureAwait(false);
+            await o.WriteLineAsync(search.SetOfPassUpAtStart is { } setsAt
+                ? $"  NORAD {request.Satellite} has been above {Format.Degrees(minimum)}° for more than a day and sets {Format.LocalTime(Format.RoundToSecond(setsAt.Time), zone)}{Offset(Format.RoundToSecond(setsAt.Time))}; that pass has no rise to list."
+                : $"  NORAD {request.Satellite} has been above {Format.Degrees(minimum)}° for more than a day, so that pass has no rise or set to list.").ConfigureAwait(false);
+        }
+
+        if (search.RiseOfPassUpAtEnd is { } longRise && search.AboveMinimumAtEndUntil is not null)
+        {
+            await o.WriteLineAsync($"  NORAD {request.Satellite} rises {Format.LocalTime(Format.RoundToSecond(longRise.Time), zone)}{Offset(Format.RoundToSecond(longRise.Time))} and stays above {Format.Degrees(minimum)}° for more than a day, so that pass has no set to list.").ConfigureAwait(false);
         }
 
         if (rows.Count < request.Count)

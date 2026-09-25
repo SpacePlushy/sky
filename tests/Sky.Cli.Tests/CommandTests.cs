@@ -167,10 +167,18 @@ public sealed partial class CommandTests : IDisposable
         // 04:00 UTC is 21:00 in Phoenix, well after civil dusk.
         await _cli.RunAsync("now");
 
+        // The reference week's shadow transitions: the ISS leaves the shadow at 04:30:15 UTC and
+        // enters it at 05:27:27, so it is in shadow at 04:00 and sunlit at 05:00, each half an hour
+        // from a transition.
         string output = _cli.Out.ToString();
-        Assert.Matches(@"sunlight    (sunlit|in the Earth's shadow)", output);
+        Assert.Contains("  sunlight    in the Earth's shadow", output, StringComparison.Ordinal);
         Assert.Contains("(dark enough to see satellites)", output, StringComparison.Ordinal);
         Assert.Matches(@"visible     (now|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) until \d{2}:\d{2}:\d{2}, up to", output);
+
+        _cli.Out.GetStringBuilder().Clear();
+        _cli.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 24, 5, 0, 0, TimeSpan.Zero));
+        await _cli.RunAsync("now");
+        Assert.Contains("  sunlight    sunlit", _cli.Out.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
