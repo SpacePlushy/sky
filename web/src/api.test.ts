@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, api, describeFailure, getJson, isAbort, type Fetch } from "./api";
+import { ApiError, api, calendarPath, describeFailure, getJson, isAbort, type Fetch } from "./api";
 
 // Problem details as ASP.NET Core writes them for this API (TypedResults.Problem), RFC 9457.
 const unknownSatellite = JSON.stringify({
@@ -155,5 +155,33 @@ describe("api", () => {
         const body = { observer: { name: "x", latitudeDeg: 0, longitudeDeg: 0, heightM: 0, timeZone: "UTC" }, minimumElevationDeg: 10, satellites: [25544], offline: true, clockSimulated: true, serverTimeUtc: "2026-09-24T04:00:00" };
         const error = await failure(api.config(undefined, respond(200, JSON.stringify(body), "application/json")));
         expect(error.detail).toContain("config.serverTimeUtc");
+    });
+});
+
+describe("calendarPath", () => {
+    const week = { days: 7, visibleOnly: true, alarmMinutes: 10 };
+
+    it("builds the documented export path for the selected satellite", () => {
+        // The route and parameters of GET /api/satellites/{id}/passes.ics in src/Sky.Api/Program.cs.
+        expect(calendarPath(25544, week)).toBe("/api/satellites/25544/passes.ics?days=7&visibleOnly=true&alarm=10");
+        expect(calendarPath(48274, week)).toBe("/api/satellites/48274/passes.ics?days=7&visibleOnly=true&alarm=10");
+    });
+
+    it("carries every option into the query", () => {
+        expect(calendarPath(25544, { days: 10, visibleOnly: false, alarmMinutes: 0 })).toBe("/api/satellites/25544/passes.ics?days=10&visibleOnly=false&alarm=0");
+        const url = new URL(calendarPath(25544, { days: 1, visibleOnly: true, alarmMinutes: 120 }), "http://127.0.0.1");
+        expect(url.pathname).toBe("/api/satellites/25544/passes.ics");
+        expect(Object.fromEntries(url.searchParams)).toEqual({ days: "1", visibleOnly: "true", alarm: "120" });
+    });
+
+    it("rejects what the API would refuse, instead of linking to an error", () => {
+        expect(() => calendarPath(0, week)).toThrow(RangeError);
+        expect(() => calendarPath(25544.5, week)).toThrow(RangeError);
+        expect(() => calendarPath(Number.NaN, week)).toThrow(RangeError);
+        expect(() => calendarPath(25544, { ...week, days: 0 })).toThrow(RangeError);
+        expect(() => calendarPath(25544, { ...week, days: 11 })).toThrow(RangeError);
+        expect(() => calendarPath(25544, { ...week, alarmMinutes: -1 })).toThrow(RangeError);
+        expect(() => calendarPath(25544, { ...week, alarmMinutes: 121 })).toThrow(RangeError);
+        expect(() => calendarPath(25544, { ...week, alarmMinutes: 2.5 })).toThrow(RangeError);
     });
 });

@@ -651,6 +651,122 @@ select {
     }
 }
 
+/* Pass tools: the calendar export and browser alerts, above the pass list */
+
+.pass-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px 16px;
+    margin: 0 0 10px;
+}
+
+.calendar {
+    flex: 1 1 220px;
+    margin: 0;
+    padding-top: 6px;
+}
+
+.calendar-link {
+    color: var(--accent);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+    text-underline-offset: 3px;
+}
+
+.alerts {
+    flex: 2 1 320px;
+    min-width: 0;
+    margin: 0;
+    padding: 8px 10px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.alerts legend {
+    padding: 0 4px;
+    color: var(--muted);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.alerts-state {
+    margin-left: 4px;
+    padding: 0 6px;
+    border: 1px solid var(--muted);
+    border-radius: 3px;
+    color: var(--muted);
+    font-weight: 700;
+}
+
+.alerts-state[data-state="on"] {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.alerts-state[data-state="blocked"],
+.alerts-state[data-state="unavailable"] {
+    border-color: var(--error-text);
+    color: var(--error-text);
+}
+
+.alerts-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+}
+
+.button {
+    padding: 6px 12px;
+    border: 1px solid var(--muted);
+    border-radius: 4px;
+    background: var(--raised);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.button:hover {
+    border-color: var(--accent);
+}
+
+.button:disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+}
+
+.alerts-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.alerts-field select {
+    width: auto;
+}
+
+.alerts-check input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--accent);
+}
+
+.alerts-status {
+    margin: 8px 0 0;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+}
+
+.alerts-scope {
+    margin: 4px 0 0;
+}
+
 /* Sky plot */
 
 .sky-frame {

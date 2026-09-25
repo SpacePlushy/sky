@@ -111,6 +111,35 @@ async function get<T>(path: string, read: (value: unknown) => T, signal?: AbortS
     }
 }
 
+export interface CalendarOptions {
+    /** Days ahead, 1 to 10, as for /passes. */
+    readonly days: number;
+    /** Only the visible parts of passes, or every pass. */
+    readonly visibleOnly: boolean;
+    /** Minutes before each event its alarm goes off, 0 to 120. */
+    readonly alarmMinutes: number;
+}
+
+/**
+ * The same-origin path of a satellite's iCalendar export, within the limits the API enforces:
+ * /api/satellites/25544/passes.ics?days=7&visibleOnly=true&alarm=10. The alarm is always sent,
+ * so the link's label never depends on the API's default.
+ */
+export function calendarPath(id: number, options: CalendarOptions): string {
+    const { days, visibleOnly, alarmMinutes } = options;
+    if (!Number.isSafeInteger(id) || id <= 0) {
+        throw new RangeError(`Not a catalog number: ${id}`);
+    }
+    if (!Number.isInteger(days) || days < 1 || days > 10) {
+        throw new RangeError(`days must be a whole number from 1 to 10: ${days}`);
+    }
+    if (!Number.isInteger(alarmMinutes) || alarmMinutes < 0 || alarmMinutes > 120) {
+        throw new RangeError(`alarm must be a whole number of minutes from 0 to 120: ${alarmMinutes}`);
+    }
+    const query = new URLSearchParams({ days: String(days), visibleOnly: String(visibleOnly), alarm: String(alarmMinutes) });
+    return `/api/satellites/${id}/passes.ics?${query.toString()}`;
+}
+
 export const api = {
     config: (signal?: AbortSignal, fetchImpl?: Fetch): Promise<Config> => get("/api/config", readConfig, signal, fetchImpl),
     satellites: (signal?: AbortSignal, fetchImpl?: Fetch): Promise<SatelliteSummary[]> => get("/api/satellites", readSatellites, signal, fetchImpl),

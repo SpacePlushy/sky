@@ -118,7 +118,14 @@ export const contrastPairs: readonly ContrastPair[] = [
     { fg: "accent", bg: "panel", min: 3, use: "focus ring and selected-row bar" },
     { fg: "accent", bg: "raised", min: 3, use: "focus ring on a selected row" },
     { fg: "accent", bg: "bg", min: 3, use: "focus ring on the page" },
-    { fg: "muted", bg: "panel", min: 3, use: "select box border" },
+    { fg: "muted", bg: "panel", min: 3, use: "select box, button, and alert-state borders" },
+    { fg: "text", bg: "raised", min: 4.5, use: "button text" },
+    { fg: "muted", bg: "raised", min: 4.5, use: "disabled button text" },
+
+    // Pass tools
+    { fg: "accent", bg: "panel", min: 4.5, use: "calendar link and ON alert state" },
+    { fg: "muted", bg: "panel", min: 4.5, use: "OFF alert state" },
+    { fg: "errorText", bg: "panel", min: 4.5, use: "BLOCKED and UNAVAILABLE alert states" },
 
     // Map graphics
     ...onMap("accent", "future track in sunlight, satellite, visibility footprint"),

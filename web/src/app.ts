@@ -5,7 +5,8 @@
 // another satellite aborts the old scope, and a response is used only if its scope is still the
 // current one, so a late answer for the previous satellite can never be drawn.
 
-import { ApiError, api, isAbort } from "./api";
+import { AlertControl } from "./alertcontrol";
+import { ApiError, api, calendarPath, isAbort } from "./api";
 import { byId, h, setText } from "./dom";
 import { WorldMap } from "./map";
 import type { Config, Now, Passes, SatelliteSummary, Track } from "./model";
@@ -23,6 +24,9 @@ const refresh = {
 } as const;
 
 const passDays = 7;
+
+/** The calendar export the pass panel links to; the link's text states the same days and alarm. */
+const calendarOptions = { days: 7, visibleOnly: true, alarmMinutes: 10 } as const;
 
 type Source = "config" | "satellites" | "now" | "track" | "passes";
 
@@ -77,6 +81,8 @@ export class App {
     private readonly telemetry: Telemetry;
     private readonly passList: PassList;
     private readonly skyPlot: SkyPlot;
+    private readonly alerts = new AlertControl();
+    private readonly calendarLink = byId("calendar-link", HTMLAnchorElement);
     private readonly select = byId("satellite", HTMLSelectElement);
     private readonly observerName = byId("observer-name", HTMLElement);
     private readonly localClock = byId("clock-local", HTMLElement);
@@ -186,6 +192,13 @@ export class App {
         const url = new URL(location.href);
         url.searchParams.set("sat", String(id));
         history.replaceState(null, "", url);
+        try {
+            this.calendarLink.href = calendarPath(id, calendarOptions);
+            this.calendarLink.hidden = false;
+        } catch {
+            this.calendarLink.removeAttribute("href");
+            this.calendarLink.hidden = true;
+        }
         this.renderAll();
         void this.pollNow();
         void this.loadTrack();
@@ -207,6 +220,7 @@ export class App {
         this.renderClock();
         this.renderCountdowns();
         this.renderPasses();
+        this.renderAlerts();
         void this.pollNow();
         const scope = this.scope;
         if (scope !== null) {
@@ -295,6 +309,7 @@ export class App {
             this.errors.delete("passes");
             this.renderPasses();
             this.renderCountdowns();
+            this.renderAlerts();
         } catch (error) {
             if (isAbort(error) || scope !== this.scope) {
                 return;
@@ -315,7 +330,24 @@ export class App {
         this.renderNow();
         this.renderPasses();
         this.renderCountdowns();
+        this.renderAlerts();
         this.renderBanners();
+    }
+
+    /** Pass alerts for the selected satellite, on the server's clock. */
+    private renderAlerts(): void {
+        const scope = this.scope;
+        const name = scope === null
+            ? ""
+            : this.now?.satellite.id === scope.id
+                ? this.now.satellite.name
+                : (this.satellites.find((s) => s.id === scope.id)?.name ?? `NORAD ${scope.id}`);
+        this.alerts.update({
+            satellite: scope === null ? null : { id: scope.id, name },
+            passes: this.passes?.passes ?? null,
+            nowMs: this.clock.isSynced ? this.clock.now() : null,
+            zone: this.zone,
+        });
     }
 
     private renderNow(): void {

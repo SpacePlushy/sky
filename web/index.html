@@ -70,6 +70,27 @@
             </section>
             <section class="panel panel-passes" aria-labelledby="passes-heading">
                 <h2 id="passes-heading">Passes, next 7 days</h2>
+                <div class="pass-tools">
+                    <p class="calendar">
+                        <a id="calendar-link" class="calendar-link" download hidden>Add visible passes to your calendar (.ics, alarm 10&nbsp;min before)</a>
+                    </p>
+                    <fieldset class="alerts">
+                        <legend>Browser alerts <span id="alerts-state" class="alerts-state" data-state="off">Off</span></legend>
+                        <div class="alerts-controls">
+                            <button type="button" id="alerts-toggle" class="button" aria-describedby="alerts-status alerts-scope">Turn on alerts</button>
+                            <label class="alerts-field">Lead time
+                                <select id="alerts-lead">
+                                    <option value="5">5 min</option>
+                                    <option value="10" selected>10 min</option>
+                                    <option value="15">15 min</option>
+                                </select>
+                            </label>
+                            <label class="alerts-field alerts-check"><input type="checkbox" id="alerts-visible-only" checked /> Visible passes only</label>
+                        </div>
+                        <p id="alerts-status" class="alerts-status" role="status"></p>
+                        <p id="alerts-scope" class="panel-note alerts-scope">Alerts only work while this tab is open. For alerts with the tab closed, use the calendar file.</p>
+                    </fieldset>
+                </div>
                 <p id="passes-note" class="panel-note"></p>
                 <div id="passes" class="passes"></div>
             </section>
