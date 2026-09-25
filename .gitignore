@@ -31,3 +31,6 @@ blob-report/
 # Python (tools/reference)
 __pycache__/
 *.pyc
+
+# Skyfield ephemeris download (tools/reference)
+tools/reference/.cache/

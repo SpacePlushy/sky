@@ -21,6 +21,22 @@ public class SunTests
     }
 
     [Fact]
+    public void Sidereal_time_matches_meeus_example_12a()
+    {
+        // Meeus, Example 12.a: 1987 April 10, 0h UT (JD 2446895.5). Mean sidereal time at Greenwich,
+        // by the same IAU-82 formula Sky uses, is 13h10m46.3668s, printed to 1e-4 s. Apparent sidereal
+        // time with the full nutation (Δψ = −3.788″, ε = 23°26′36.85″) is 13h10m46.1351s. Sky's
+        // one-term nutation leaves out terms worth at most 2.1″ in the equation of the equinoxes,
+        // 0.14 s of time, so Sky's apparent sidereal time must be within that of the book's.
+        var jd = new JulianDate(2446895.5, 0.0);
+        double meanSeconds = SiderealTime.GreenwichMean(jd) / (2 * Math.PI) * 86400.0;
+        double apparentSeconds = (SiderealTime.GreenwichMean(jd) + Sun.Apparent(jd).EquationOfEquinoxesRadians) / (2 * Math.PI) * 86400.0;
+
+        Assert.Equal((13 * 3600) + (10 * 60) + 46.3668, meanSeconds, 1e-4);
+        Assert.Equal((13 * 3600) + (10 * 60) + 46.1351, apparentSeconds, 0.14);
+    }
+
+    [Fact]
     public void Declination_and_distance_stay_within_their_physical_ranges()
     {
         // Seeded random instants, 1950 to 2050, the span Meeus's method is meant for. The Sun's
