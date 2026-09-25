@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sky.Cli\Sky.Cli.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\src\Sky.Cli\appsettings.json" Link="Committed\appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Sky.CelesTrak.Tests\Fixtures\stations-2026-09-24.json" Link="Fixtures\stations-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Sky.Orbital.Tests\Data\Skyfield\iss-phoenix-2026-09-24.json" Link="Fixtures\iss-phoenix-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
