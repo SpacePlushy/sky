@@ -4,16 +4,29 @@ using Sky.Settings;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Only loopback Host headers, unless an operator says otherwise: a page on another site that
+// rebinds its DNS name to 127.0.0.1 would otherwise be same-origin with the API and could read
+// /api/config, which holds the observer's location.
+if (string.IsNullOrWhiteSpace(builder.Configuration["AllowedHosts"]))
+{
+    builder.Configuration["AllowedHosts"] = "localhost;127.0.0.1;[::1]";
+}
+
+// The dashboard polls every second; per-request information logging would grow logs without end.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
 // Settings come from the same files and SKY_ environment variables as the CLI. They are loaded
-// when first needed, so a test host that supplies its own never reads the owner's local file.
+// when first needed, so a test host that supplies its own never reads the owner's local file. The
+// dashboard's clock is its own type, so the framework keeps the system clock and building the host
+// never loads settings; invalid settings are reported by the check after Build.
 builder.Services.AddSingleton(_ => SkySettings.Load(AppContext.BaseDirectory, "SKY_"));
-builder.Services.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<SkySettings>().ClockStartUtc is { } start
+builder.Services.AddSingleton(sp => new SkyClock(sp.GetRequiredService<SkySettings>().ClockStartUtc is { } start
     ? new StartedClock(TimeProvider.System, start)
-    : TimeProvider.System);
+    : TimeProvider.System));
 builder.Services.AddSingleton(sp =>
 {
     SkySettings s = sp.GetRequiredService<SkySettings>();
-    return new GpCache(s.CacheDirectory, new CelesTrakClient(CelesTrakClient.CreateHttpClient()), sp.GetRequiredService<TimeProvider>(), s.Offline);
+    return new GpCache(s.CacheDirectory, new CelesTrakClient(CelesTrakClient.CreateHttpClient()), sp.GetRequiredService<SkyClock>().Time, s.Offline);
 });
 builder.Services.AddSingleton<SatelliteService>();
 builder.Services.AddProblemDetails();

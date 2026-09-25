@@ -17,12 +17,16 @@ internal sealed class ApiException(int status, string title, string detail) : Ex
     public string Title { get; } = title;
 }
 
+/// <summary>The dashboard's clock, which a demo can start at a fixed instant; kept apart from the framework's TimeProvider.</summary>
+/// <param name="Time">The clock.</param>
+internal sealed record SkyClock(TimeProvider Time);
+
 /// <summary>
 /// The dashboard's view of the orbital core: finds element sets through the policy cache and runs
 /// the same code as the CLI. Thread-safe: each call builds its own propagator, since
 /// <see cref="Sgp4Propagator"/> is not.
 /// </summary>
-internal sealed class SatelliteService(SkySettings settings, GpCache cache, TimeProvider time) : IDisposable
+internal sealed class SatelliteService(SkySettings settings, GpCache cache, SkyClock clock, IHostApplicationLifetime lifetime)
 {
     // How long group data is reused in memory before asking the cache again. The cache itself
     // decides when CelesTrak may be asked; this only saves reparsing on every poll.
@@ -36,47 +40,77 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
     private static readonly TimeSpan TrackStep = TimeSpan.FromSeconds(30);
     private const int MaximumTrackPoints = 1000;
 
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    // How far from the element epoch ?at= may ask: well inside SGP4's useful range and the
+    // DateTimeOffset range the pass finder's one-day extensions need.
+    private static readonly TimeSpan MaximumAtDistance = TimeSpan.FromDays(30);
+
+    private readonly TimeProvider _time = clock.Time;
+    private readonly Lock _sync = new();
     private readonly TopocentricFrame _observer = new(settings.Observer);
     private (DateTimeOffset LoadedAt, IReadOnlyList<GpCacheResult> Groups)? _memory;
+    private Task<IReadOnlyList<GpCacheResult>>? _refresh;
 
-    public DateTimeOffset Now => time.GetUtcNow();
+    public DateTimeOffset Now => _time.GetUtcNow();
 
     public SkySettings Settings => settings;
 
-    public void Dispose() => _gate.Dispose();
-
-    /// <summary>Every configured group, through the cache, reused in memory for a minute.</summary>
+    /// <summary>
+    /// Every configured group, through the cache, reused in memory for a minute. A refresh is shared
+    /// by every caller and runs to completion on the application's lifetime, not a caller's: a
+    /// browser that aborts its request ends only its own wait, never a CelesTrak download that the
+    /// cache has already counted against the 2-hour rule.
+    /// </summary>
     public async Task<IReadOnlyList<GpCacheResult>> GroupsAsync(CancellationToken cancellationToken)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
+        Task<IReadOnlyList<GpCacheResult>> refresh;
+        lock (_sync)
         {
-            DateTimeOffset now = time.GetUtcNow();
+            DateTimeOffset now = _time.GetUtcNow();
             if (_memory is { } memory && now >= memory.LoadedAt && now - memory.LoadedAt < MemoryLifetime)
             {
                 return memory.Groups;
             }
 
+            refresh = _refresh ??= LoadGroupsAsync();
+        }
+
+        return await refresh.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<GpCacheResult>> LoadGroupsAsync()
+    {
+        // Return to the caller first, so _refresh is assigned before this can finish and clear it.
+        await Task.Yield();
+        try
+        {
             var groups = new List<GpCacheResult>();
             foreach (string group in settings.Groups)
             {
-                groups.Add(await cache.GetGroupAsync(group, cancellationToken).ConfigureAwait(false));
+                groups.Add(await cache.GetGroupAsync(group, lifetime.ApplicationStopping).ConfigureAwait(false));
             }
 
-            _memory = (now, groups);
+            lock (_sync)
+            {
+                // Stamped when the data arrived, not when the load began: a load that waited on
+                // another process's cache lock is still fresh for a full minute.
+                _memory = (_time.GetUtcNow(), groups);
+            }
+
             return groups;
         }
         finally
         {
-            _gate.Release();
+            lock (_sync)
+            {
+                _refresh = null;
+            }
         }
     }
 
     public async Task<IReadOnlyList<SatelliteSummary>> SatellitesAsync(CancellationToken cancellationToken)
     {
         var groups = await GroupsAsync(cancellationToken).ConfigureAwait(false);
-        DateTimeOffset now = time.GetUtcNow();
+        DateTimeOffset now = _time.GetUtcNow();
         // The same choice FindAsync makes: the first group holding the satellite, newest epoch there.
         return groups
             .SelectMany((g, order) => g.Records.Select(r => (Order: order, Group: g.Group, Record: r)))
@@ -96,9 +130,15 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
 
     public async Task<NowResponse> NowAsync(long id, DateTimeOffset? at, CancellationToken cancellationToken)
     {
-        var (record, warnings) = await FindAsync(id, cancellationToken).ConfigureAwait(false);
+        // Snapped to the millisecond the response reports, so every value belongs to that instant.
+        DateTimeOffset t = Millisecond(at ?? _time.GetUtcNow());
+        var (record, warnings) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
+        if (at is not null && (t - record.Elements.Epoch).Duration() > MaximumAtDistance)
+        {
+            throw new ApiException(400, "Invalid time", $"at must be within {MaximumAtDistance.TotalDays:F0} days of the element set's epoch, {record.Elements.Epoch:yyyy-MM-dd HH:mm} UTC.");
+        }
+
         Sgp4Propagator propagator = CreatePropagator(record);
-        DateTimeOffset t = at ?? time.GetUtcNow();
         EcefState ecef = Propagate(propagator, t);
 
         Geodetic subpoint = Wgs84.FromEcef(ecef.Position);
@@ -129,9 +169,9 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
 
     public async Task<TrackResponse> TrackAsync(long id, double? minutes, CancellationToken cancellationToken)
     {
-        var (record, warnings) = await FindAsync(id, cancellationToken).ConfigureAwait(false);
+        DateTimeOffset t = Millisecond(_time.GetUtcNow());
+        var (record, warnings) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
         Sgp4Propagator propagator = CreatePropagator(record);
-        DateTimeOffset t = time.GetUtcNow();
 
         // One orbit either side by default, so the map shows where the satellite has been and where
         // it is going; long periods are thinned to keep the response small.
@@ -143,9 +183,10 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
 
         TimeSpan half = TimeSpan.FromMinutes(span);
         TimeSpan step = TrackStep;
-        if ((half * 2) / step > MaximumTrackPoints)
+        if ((half * 2) / step > MaximumTrackPoints - 1)
         {
-            step = (half * 2) / MaximumTrackPoints;
+            // Thinned to at most MaximumTrackPoints points, on whole milliseconds.
+            step = TimeSpan.FromMilliseconds(Math.Ceiling((half * 2).TotalMilliseconds / (MaximumTrackPoints - 1)));
         }
 
         // Sampled on whole milliseconds, so each point's values belong exactly to the time it reports.
@@ -187,9 +228,9 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             throw new ApiException(400, "Invalid minimum elevation", "minElevation must be from 0 to below 90 degrees.");
         }
 
-        var (record, warnings) = await FindAsync(id, cancellationToken).ConfigureAwait(false);
+        DateTimeOffset t = Millisecond(_time.GetUtcNow());
+        var (record, warnings) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
         Sgp4Propagator propagator = CreatePropagator(record);
-        DateTimeOffset t = time.GetUtcNow();
         PassSearchResult search = PassFinder.Find(propagator, _observer, t, t.AddDays(d), minimum);
 
         return new PassesResponse(
@@ -211,7 +252,7 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
         return new HealthResponse(
             anyData ? "ok" : "no data",
             settings.Offline,
-            Utc(time.GetUtcNow()),
+            Utc(_time.GetUtcNow()),
             groups.Select(g => new GroupHealth(g.Group, g.Records.Count, g.Source.ToString(), g.DownloadedUtc is { } dl ? Utc(dl) : null, g.Warnings)).ToList());
     }
 
@@ -265,7 +306,7 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
     /// The element set the CLI would use: the configured groups in order, the first that holds
     /// the satellite, and its newest epoch there.
     /// </summary>
-    private async Task<(GpRecord Record, IReadOnlyList<string> Warnings)> FindAsync(long id, CancellationToken cancellationToken)
+    private async Task<(GpRecord Record, IReadOnlyList<string> Warnings)> FindAsync(long id, DateTimeOffset t, CancellationToken cancellationToken)
     {
         var groups = await GroupsAsync(cancellationToken).ConfigureAwait(false);
         foreach (GpCacheResult group in groups)
@@ -277,7 +318,8 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             }
 
             var warnings = new List<string>(group.Warnings);
-            double age = (time.GetUtcNow() - record.Elements.Epoch).TotalDays;
+            // Age at the instant the response is for, which ?at= can move away from the clock.
+            double age = (t - record.Elements.Epoch).TotalDays;
             if (age > 3)
             {
                 warnings.Add($"{record.Name} elements are {age:F1} days old; predictions degrade by kilometers per day of element age.");
@@ -286,7 +328,7 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             {
                 // Elements from after "now": the clock is simulated or wrong. SGP4 propagates
                 // backward as well as forward, so the predictions stand, but it is worth knowing.
-                warnings.Add(string.Create(CultureInfo.InvariantCulture, $"{record.Name} elements are from {-age * 24:F1} hours after the clock's time; is the clock simulated or wrong?"));
+                warnings.Add(string.Create(CultureInfo.InvariantCulture, $"{record.Name} elements are from {-age * 24:F1} hours after the requested time; is the clock simulated or wrong?"));
             }
 
             return (record, warnings);

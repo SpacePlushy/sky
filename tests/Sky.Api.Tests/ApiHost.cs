@@ -19,27 +19,41 @@ internal sealed class ApiHost : WebApplicationFactory<Program>
     public static readonly DateTimeOffset Start = new(2026, 9, 24, 4, 0, 0, TimeSpan.Zero);
 
     private readonly string _cache = Path.Combine(Path.GetTempPath(), "sky-api-tests", Guid.NewGuid().ToString("N"));
+    private readonly HttpMessageHandler? _online;
+    private readonly IReadOnlyList<string> _groups;
 
-    public ApiHost(bool seed = true)
+    /// <param name="seed">Put the recorded stations response in the cache.</param>
+    /// <param name="online">A fake CelesTrak to use in online mode; offline when null.</param>
+    /// <param name="groups">The configured groups; stations by default.</param>
+    /// <param name="seedFiles">Writes further cache files into the folder.</param>
+    /// <param name="start">The clock's start; 2026-09-24 04:00 UTC by default.</param>
+    public ApiHost(bool seed = true, HttpMessageHandler? online = null, IReadOnlyList<string>? groups = null, Action<string>? seedFiles = null, DateTimeOffset? start = null)
     {
         Directory.CreateDirectory(_cache);
         if (seed)
         {
-            File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", "stations-2026-09-24.json"), Path.Combine(_cache, "stations.json"));
+            File.Copy(FixturePath, Path.Combine(_cache, "stations.json"));
         }
+
+        seedFiles?.Invoke(_cache);
+        _online = online;
+        _groups = groups ?? ["stations"];
+        Clock = new FakeTimeProvider(start ?? Start);
     }
 
-    public FakeTimeProvider Clock { get; } = new(Start);
+    public static string FixturePath => Path.Combine(AppContext.BaseDirectory, "Fixtures", "stations-2026-09-24.json");
 
-    public static SkySettings Settings(string cache) => new(
+    public FakeTimeProvider Clock { get; }
+
+    public SkySettings Settings() => new(
         "Arizona State Capitol, Phoenix",
         new Geodetic(33.4478, -112.0972, 0.331),
         TimeZoneInfo.FindSystemTimeZoneById("America/Phoenix"),
-        ["stations"],
-        cache,
+        _groups,
+        _cache,
         10.0)
     {
-        Offline = true,
+        Offline = _online is null,
     };
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -47,11 +61,11 @@ internal sealed class ApiHost : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<SkySettings>();
-            services.RemoveAll<TimeProvider>();
+            services.RemoveAll<SkyClock>();
             services.RemoveAll<GpCache>();
-            services.AddSingleton(Settings(_cache));
-            services.AddSingleton<TimeProvider>(Clock);
-            services.AddSingleton(sp => new GpCache(_cache, new CelesTrakClient(new HttpClient(new NoNetwork())), Clock, offline: true));
+            services.AddSingleton(Settings());
+            services.AddSingleton(new SkyClock(Clock));
+            services.AddSingleton(sp => new GpCache(_cache, new CelesTrakClient(new HttpClient(_online ?? new NoNetwork())), Clock, offline: _online is null));
         });
     }
 

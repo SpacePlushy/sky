@@ -76,6 +76,12 @@ public sealed class EndpointTests : IDisposable
         Assert.Equal("ISS (ZARYA)", json.GetProperty("satellite").GetProperty("name").GetString());
         Assert.Equal(1440.0 / IssRecord.Elements.MeanMotion, json.GetProperty("satellite").GetProperty("periodMinutes").GetDouble(), 1e-12);
 
+        // The footprint radii are the formula's, at the reported height, for 0° and the 10° minimum.
+        double height = position.GetProperty("altitudeKm").GetDouble();
+        Assert.Equal(SatelliteService.FootprintRadiusDegrees(height, 0.0), json.GetProperty("footprintRadiusDeg").GetDouble(), 1e-12);
+        Assert.Equal(SatelliteService.FootprintRadiusDegrees(height, 10.0), json.GetProperty("visibilityRadiusDeg").GetDouble(), 1e-12);
+        Assert.True(json.GetProperty("visibilityRadiusDeg").GetDouble() < json.GetProperty("footprintRadiusDeg").GetDouble());
+
         // The rest is the orbital core's own output, so it must match exactly.
         var ecef = EarthRotation.TemeToEcef(Sgp4Propagator.Create(IssRecord.Elements).Propagate(ApiHost.Start).State, ApiHost.Start);
         Assert.Equal(Visibility.IsSunlit(Sgp4Propagator.Create(IssRecord.Elements), ApiHost.Start), json.GetProperty("sunlit").GetBoolean());
@@ -140,6 +146,16 @@ public sealed class EndpointTests : IDisposable
             for (var t = pass.Rise.Time; t < pass.Set.Time; t = t.AddSeconds(10))
             {
                 Assert.Contains(Ms(t), pathTimes);
+            }
+
+            // Each point's direction and sunlight are the core's, at the point's own time.
+            foreach (var point in path)
+            {
+                var t = Time(point);
+                var look = Phoenix.LookAt(EarthRotation.TemeToEcef(propagator.Propagate(t).State, t));
+                Assert.Equal(look.AzimuthDegrees, point.GetProperty("azimuthDeg").GetDouble(), 1e-12);
+                Assert.Equal(look.ElevationDegrees, point.GetProperty("elevationDeg").GetDouble(), 1e-12);
+                Assert.Equal(Visibility.IsSunlit(propagator, t), point.GetProperty("sunlit").GetBoolean());
             }
         }
 
