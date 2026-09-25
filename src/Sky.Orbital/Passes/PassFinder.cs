@@ -18,6 +18,12 @@ namespace Sky.Orbital.Passes;
 /// times 10 s.
 /// </para>
 /// <para>
+/// <b>Dips.</b> The mirror case: elevation can dip below the minimum between two samples that are
+/// both above it, splitting what looks like one pass into two. The same rate bound decides when a
+/// dip is possible, and Brent's minimizer finds the lowest point between the samples; if it is below
+/// the minimum, the pass is split there.
+/// </para>
+/// <para>
 /// <b>Rise and set.</b> Each is bracketed by a sample below the minimum and one at or above it (or
 /// the refined peak, for a grazing pass), and Brent's method finds the crossing to within
 /// <see cref="TimeToleranceSeconds"/>. A crossing inside one 10 s step is taken to be unique: a
@@ -139,12 +145,29 @@ public static class PassFinder
                     continue; // no sample below the minimum on one side: the rise or set is out of reach
                 }
 
-                Sample peak = HighestRefinedPeak(propagator, observer, samples, first - 1, last + 1);
-                DateTimeOffset riseBracketEnd = peak.Event.Time < samples[first].Event.Time ? peak.Event.Time : samples[first].Event.Time;
-                DateTimeOffset setBracketStart = peak.Event.Time > samples[last].Event.Time ? peak.Event.Time : samples[last].Event.Time;
-                PassEvent rise = Crossing(propagator, observer, samples[first - 1].Event.Time, riseBracketEnd, minimum);
-                PassEvent set = Crossing(propagator, observer, setBracketStart, samples[last + 1].Event.Time, minimum);
-                passes.Add(new SatellitePass(rise, peak.Event, set, PeakUncertaintyDegrees(peak)));
+                // The run can hide dips below the minimum between two of its samples, which split it
+                // into separate passes. Each segment is bounded by a sample below the minimum or by
+                // the bottom of a dip, both below it.
+                int segmentStart = first;
+                DateTimeOffset below = samples[first - 1].Event.Time;
+                for (int k = first; k <= last; k++)
+                {
+                    DateTimeOffset? dip = k < last ? DipBelow(propagator, observer, samples[k], samples[k + 1], minimum) : null;
+                    if (k < last && dip is null)
+                    {
+                        continue;
+                    }
+
+                    DateTimeOffset after = dip ?? samples[last + 1].Event.Time;
+                    Sample peak = HighestRefinedPeak(propagator, observer, samples, segmentStart, k, below, after);
+                    DateTimeOffset riseBracketEnd = peak.Event.Time < samples[segmentStart].Event.Time ? peak.Event.Time : samples[segmentStart].Event.Time;
+                    DateTimeOffset setBracketStart = peak.Event.Time > samples[k].Event.Time ? peak.Event.Time : samples[k].Event.Time;
+                    PassEvent rise = Crossing(propagator, observer, below, riseBracketEnd, minimum);
+                    PassEvent set = Crossing(propagator, observer, setBracketStart, after, minimum);
+                    passes.Add(new SatellitePass(rise, peak.Event, set, PeakUncertaintyDegrees(peak)));
+                    segmentStart = k + 1;
+                    below = after;
+                }
             }
             else
             {
@@ -219,16 +242,44 @@ public static class PassFinder
             ?? throw new InvalidOperationException("SGP4 failed between two instants where it succeeded.");
     }
 
-    /// <summary>Refines every local maximum between two sample indices and returns the highest result.</summary>
+    /// <summary>
+    /// Where elevation dips below the minimum between two samples at or above it, or null if it does
+    /// not. A dip needs elevation to fall and climb back by the samples' heights above the minimum
+    /// within one step, which the rate bound rules out unless both are close to it; only then is the
+    /// lowest point searched for.
+    /// </summary>
+    private static DateTimeOffset? DipBelow(
+        Sgp4Propagator propagator, TopocentricFrame observer, Sample a, Sample b, double minimum)
+    {
+        double clearance = (a.Event.ElevationDegrees - minimum) + (b.Event.ElevationDegrees - minimum);
+        if (clearance > MaximumGainDegrees(a, Step))
+        {
+            return null;
+        }
+
+        double span = (b.Event.Time - a.Event.Time).TotalSeconds;
+        SearchResult lowest = Brent.Minimize(
+            seconds => ElevationAt(propagator, observer, At(a.Event.Time, seconds)),
+            0.0,
+            span,
+            PeakToleranceSeconds);
+        return lowest.Value < minimum ? At(a.Event.Time, lowest.X) : null;
+    }
+
+    /// <summary>
+    /// Refines every local maximum among the samples <paramref name="from"/> to <paramref name="to"/>,
+    /// searching no further than <paramref name="lower"/> and <paramref name="upper"/>, where elevation
+    /// is below the minimum, and returns the highest result.
+    /// </summary>
     private static Sample HighestRefinedPeak(
-        Sgp4Propagator propagator, TopocentricFrame observer, List<Sample> samples, int before, int after)
+        Sgp4Propagator propagator, TopocentricFrame observer, List<Sample> samples, int from, int to, DateTimeOffset lower, DateTimeOffset upper)
     {
         Sample? best = null;
-        for (int k = before + 1; k < after; k++)
+        for (int k = from; k <= to; k++)
         {
             if (IsLocalMaximum(samples, k))
             {
-                Sample refined = Refine(propagator, observer, samples[k]);
+                Sample refined = Refine(propagator, observer, samples[k], lower, upper);
                 if (best is null || refined.Event.ElevationDegrees > best.Value.Event.ElevationDegrees)
                 {
                     best = refined;
@@ -236,8 +287,10 @@ public static class PassFinder
             }
         }
 
-        // A run of samples at or above the minimum always contains a local maximum.
-        return best ?? throw new InvalidOperationException("No local maximum in a pass.");
+        // A run bounded by samples below the minimum always contains a local maximum. A segment cut
+        // off by a dip may not, since the sample across the dip can be higher; the segment's highest
+        // sample then leads to its peak.
+        return best ?? Refine(propagator, observer, samples.Skip(from).Take(to - from + 1).MaxBy(x => x.Event.ElevationDegrees), lower, upper);
     }
 
     private static bool IsLocalMaximum(List<Sample> samples, int k) =>
@@ -245,13 +298,19 @@ public static class PassFinder
         && samples[k].Event.ElevationDegrees >= samples[k + 1].Event.ElevationDegrees;
 
     /// <summary>Maximizes elevation within one step either side of a sample with Brent's minimizer.</summary>
-    private static Sample Refine(Sgp4Propagator propagator, TopocentricFrame observer, Sample coarse)
+    private static Sample Refine(Sgp4Propagator propagator, TopocentricFrame observer, Sample coarse) =>
+        Refine(propagator, observer, coarse, DateTimeOffset.MinValue, DateTimeOffset.MaxValue);
+
+    /// <summary>As above, but searching no earlier than <paramref name="lower"/> and no later than <paramref name="upper"/>.</summary>
+    private static Sample Refine(Sgp4Propagator propagator, TopocentricFrame observer, Sample coarse, DateTimeOffset lower, DateTimeOffset upper)
     {
         double step = Step.TotalSeconds;
+        double from = Math.Max(-step, lower == DateTimeOffset.MinValue ? -step : (lower - coarse.Event.Time).TotalSeconds);
+        double to = Math.Min(step, upper == DateTimeOffset.MaxValue ? step : (upper - coarse.Event.Time).TotalSeconds);
         SearchResult found = Brent.Minimize(
             seconds => -ElevationAt(propagator, observer, At(coarse.Event.Time, seconds)),
-            -step,
-            step,
+            from,
+            to,
             PeakToleranceSeconds);
         Sample? refined = Observe(propagator, observer, At(coarse.Event.Time, found.X));
 

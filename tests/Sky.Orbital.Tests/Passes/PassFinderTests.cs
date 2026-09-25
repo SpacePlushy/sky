@@ -250,6 +250,45 @@ public class PassFinderTests
     }
 
     [Fact]
+    public void A_dip_below_the_minimum_between_two_samples_splits_the_pass()
+    {
+        // The Molniya pass above has maxima of 79.4 and 85.1 degrees with a minimum between them.
+        // Put the minimum elevation just above that lowest point, so elevation dips below it for about
+        // 6 s, centered between two 10 s samples. Every sample stays above the minimum, so only the
+        // rate-bound check can find the dip, and the pass must come back as two.
+        var molniya = Tle.Parse(
+            "1 08195U 75081A   06176.33215444  .00000099  00000-0  11873-3 0   813",
+            "2 08195  64.1586 279.0717 6877146 264.7651  20.2257  2.00491383225656");
+        var propagator = Sgp4Propagator.Create(molniya);
+        var observer = new TopocentricFrame(new Geodetic(45.0, -100.0, 0.0));
+        var start = new DateTimeOffset(2006, 6, 26, 7, 0, 0, TimeSpan.Zero);
+        var whole = Assert.Single(PassFinder.Find(propagator, observer, start, start.AddHours(13), 10.0).Passes);
+
+        double Elevation(DateTimeOffset t) => observer.LookAt(EarthRotation.TemeToEcef(propagator.Propagate(t).State, t)).ElevationDegrees;
+
+        // The lowest point between the maxima: a coarse sweep, then Brent's minimizer.
+        var coarse = Enumerable.Range(0, 400).Select(k => whole.Rise.Time.AddHours(1).AddMinutes(k)).Where(t => t < whole.Set.Time.AddHours(-1)).MinBy(Elevation);
+        var lowest = Sky.Orbital.Numerics.Brent.Minimize(s => Elevation(coarse.AddSeconds(s)), -60, 60, 1e-3);
+        var bottom = coarse.AddTicks((long)Math.Round(lowest.X * TimeSpan.TicksPerSecond));
+        double curvature = (Elevation(bottom.AddSeconds(60)) + Elevation(bottom.AddSeconds(-60)) - (2 * lowest.Value)) / 3600.0; // deg/s²
+        Assert.True(curvature > 0, "No minimum between the maxima.");
+        double minimum = lowest.Value + (0.5 * curvature * 3.0 * 3.0); // about 3 s either side of the bottom
+
+        // Samples fall at bottom ± 5 s, ± 15 s, ...: none inside the dip.
+        var searchStart = bottom.AddSeconds(-5).AddSeconds(-10 * 360);
+        var passes = PassFinder.Find(propagator, observer, searchStart, searchStart.AddHours(2), minimum).Passes;
+        Assert.True(Elevation(bottom.AddSeconds(-5)) > minimum && Elevation(bottom.AddSeconds(5)) > minimum);
+
+        var near = passes.Where(p => Math.Abs((p.Set.Time - bottom).TotalMinutes) < 1 || Math.Abs((p.Rise.Time - bottom).TotalMinutes) < 1).ToList();
+        Assert.Equal(2, near.Count);
+        Assert.InRange((bottom - near[0].Set.Time).TotalSeconds, 1.0, 5.0);
+        Assert.InRange((near[1].Rise.Time - bottom).TotalSeconds, 1.0, 5.0);
+        Assert.True(near[0].Set.Time < near[1].Rise.Time);
+        Assert.Equal(minimum, Elevation(near[0].Set.Time), 1e-6);
+        Assert.Equal(minimum, Elevation(near[1].Rise.Time), 1e-6);
+    }
+
+    [Fact]
     public void Random_observers_give_ordered_non_overlapping_passes_with_crossings_on_the_minimum()
     {
         // Invariants of a correct finder, for seeded random observers and minimum elevations.
