@@ -80,24 +80,32 @@ IERS nominal rate, which differs from Sky's GMST rate by 8.6×10⁻¹² rad/s.
 Rise and set come from 10 s samples. Each peak is then searched in 0.1 s steps within one
 coarse step of the best sample. Elevation near the zenith changes about 1° per second, so a
 10 s grid alone could miss an overhead peak by up to 5°. The bounds follow from that design.
-The line of sight to the ISS turns at most 7.7 km/s ÷ 410 km, which is 1.08°/s.
+
+The peak-elevation bound depends on the orbit, so Sky derives it from each satellite's
+elements (`CoarsePassFinder.PeakElevationBoundDegrees`): the fastest the line of sight can
+turn, times 0.05 s. That rate is the satellite's highest speed relative to the Earth over the
+shortest possible range, with 25 km margins on the orbit's radii. It is 0.061° for the ISS,
+and `sky passes` prints it for whichever satellite is chosen.
 
 The reference events are Skyfield's, computed with UT1 = UTC as Sky's production path is.
-Each was refined with Skyfield's own altitude function to under a microsecond, because
-`find_events` stops at half a second, and its times were up to 0.22 s from the true crossings.
+Each was refined with Skyfield's own altitude function, rise and set to under a microsecond and
+peaks to about 10 µs, because `find_events` stops at half a second. Its times were up to
+0.22 s from the true events.
 
 | Check | Bound | Measured |
 |---|---|---|
 | Rise is late by, over 25 passes in 7 days | 0 to 10 s | 0.238 to 9.993 s |
 | Set is early by | 0 to 10 s | 0.209 to 9.551 s |
 | Peak time | Within 0.1 s | Within 0.046 s |
-| Peak elevation is low by | 0 to 0.054° | 0 to 0.00003° |
-| Observer directly under the ground track | Peak 90° at the overhead instant, within 0.1 s and 0.06° | 90.0000°, within 0.001 s |
+| Peak elevation is low by | 0 to 0.061° (ISS) | 0 to 0.00003° |
+| Observer directly under the ground track, peak midway between samples | 90° at the overhead instant, within 0.1 s and 0.061° | 0.0495° low, 0.050 s off: the worst case |
+| Overhead passes for the lowest-perigee objects in `stations` | Each satellite's own bound | HRC MONOBLOCK CAMERA: 0.078° against 0.099° |
 | Passes whose peak clears 30° | Exactly Skyfield's 12 | 12 |
 | A decaying satellite | Search stops and reports the SGP4 error | Reports `Decayed` |
 
-A pass already in progress when a search starts is not listed; `sky now` reports it as in
-progress. Milestone 2 replaces the 10 s rise and set grid with root-finding.
+Searches start on a whole second, so printed rise and set times are exact and peaks print to
+tenths of a second. A pass already in progress when a search starts is not listed; `sky now`
+reports it as in progress. Milestone 2 replaces the 10 s rise and set grid with root-finding.
 
 ### CelesTrak data and policy
 
@@ -105,7 +113,7 @@ progress. Milestone 2 replaces the 10 s rise and set grid with root-finding.
 |---|---|
 | OMM parsing | A real `GROUP=stations` response, 22 records, including 6-digit catalog numbers |
 | Refuses SGP4-XP (ephemeris type 4) | SGP4 would propagate those elements to wrong positions without error |
-| Every cache rule | 23 tests with a fake clock and a scripted fake server that records each request, including a run interrupted mid-request and an unreadable state file |
+| Every cache rule | 24 tests with a fake clock and a scripted fake server that records each request, including a run interrupted mid-request and an unreadable state file (treated as blocked) |
 
 The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 

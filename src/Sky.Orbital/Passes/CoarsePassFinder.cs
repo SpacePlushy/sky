@@ -17,8 +17,9 @@ namespace Sky.Orbital.Passes;
 /// The peak is refined because elevation near the zenith changes about 1 degree per second, so a
 /// 10 s grid alone could miss an overhead peak by up to 5 degrees. Elevation during a pass has a
 /// single maximum, which lies within one coarse step of the highest coarse sample. Searching that
-/// 20 s span in 0.1 s steps puts the reported peak within 0.1 s of the true one, and at most
-/// 0.054 degrees below it: the line of sight turns at most 7.7 km/s / 410 km = 1.08 deg/s.
+/// 20 s span in 0.1 s steps puts the reported peak within 0.1 s of the true one, and below it by
+/// at most <see cref="PeakElevationBoundDegrees"/>, which depends on how low the orbit is: 0.061
+/// degrees for the ISS.
 /// </para>
 /// <para>
 /// Only complete passes are reported: a pass already above the minimum at the start, or still

@@ -25,7 +25,8 @@ dotnet run --project src/Sky.Cli -- passes --sat 48274 --count 3 --min-elevation
 The first run downloads the `stations` group from CelesTrak and caches it. Later runs reuse
 the cache for 6 hours. Sky never requests the same data within 2 hours of its last request,
 even across restarts or an interrupted run, and it stops and asks for a person if CelesTrak
-answers with an error.
+answers with an error. That holds for one process at a time; two copies started at the same
+moment against one cache could each make a request.
 
 To use your own location, copy `src/Sky.Cli/appsettings.Local.example.json` to
 `appsettings.Local.json` in the same folder and edit it. That file is gitignored. The time
@@ -42,7 +43,8 @@ Correctness is checked at every step, against sources that share no code with Sk
 - **The full pipeline** matches Skyfield, an independent Python library, to under a
   millimeter and 10⁻¹⁰ degrees for the ISS over Phoenix.
 - **Pass predictions** match Skyfield's 25 passes over 7 days within the finder's stated
-  bounds: rise and set within 10 s, and peaks within 0.1 s and 0.06°.
+  bounds: rise and set within 10 s, and peaks within 0.1 s and a per-satellite elevation
+  bound (0.061° for the ISS).
 
 Every tolerance was set from analysis before its test ran. Tests run on Linux, macOS, and
 Windows on every push, and weekly. Details, measured results, and the issues this process

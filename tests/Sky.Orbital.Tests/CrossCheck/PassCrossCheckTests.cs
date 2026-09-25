@@ -7,11 +7,11 @@ namespace Sky.Orbital.Tests.CrossCheck;
 /// <summary>
 /// Milestone 1's pass finder against refined Skyfield pass events for the ISS over Phoenix, 7 days
 /// from 2026-09-24 04:00 UTC. The reference events use UT1 = UTC, as Sky's production path does,
-/// and are refined with Skyfield's own altitude function to well under a microsecond, so the
-/// bounds below are exact consequences of the finder's design, with 1 ms of slack for rounding:
-/// rise is the first 10 s sample at or above 10 degrees, so 0 to 10 s late; set is the last, so
-/// 0 to 10 s early; the peak is refined in 0.1 s steps, so it is within 0.1 s of the true peak and
-/// at most 0.054 degrees low (the line of sight turns at most 7.7 km/s / 410 km = 1.08 deg/s).
+/// and are refined with Skyfield's own altitude function (rise and set to under a microsecond,
+/// peaks to about 10 microseconds), so the bounds below are exact consequences of the finder's
+/// design, with 1 ms of slack for rounding: rise is the first 10 s sample at or above 10 degrees,
+/// so 0 to 10 s late; set is the last, so 0 to 10 s early; the peak is refined in 0.1 s steps, so
+/// it is within 0.1 s of the true peak and low by at most the ISS's PeakElevationBoundDegrees.
 /// </summary>
 public class PassCrossCheckTests
 {
@@ -21,7 +21,7 @@ public class PassCrossCheckTests
     private static readonly TimeSpan Slack = TimeSpan.FromMilliseconds(1);
 
     private static readonly TimeSpan PeakTimeBound = TimeSpan.FromSeconds(0.1);
-    private const double PeakElevationShortfallDegrees = 0.06;
+    private static readonly double PeakElevationShortfallDegrees = CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements);
 
     [Theory]
     [InlineData(10.0, 25)]
