@@ -8,12 +8,26 @@ It pulls orbital elements from [CelesTrak](https://celestrak.org), propagates
 orbits with SGP4, and shows where satellites are now, what's coming overhead
 next, and when it's worth going outside to look.
 
-> **Status:** Milestones 1 (orbital core) and 2 (pass prediction and visibility) are built and
-> in review. It is a command-line tool; the dashboard arrives in Milestone 3.
+> **Status:** Milestones 1 (orbital core), 2 (pass prediction and visibility), and 3 (dashboard)
+> are built and in review.
 
 ## Try it
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download).
+**The dashboard, with one command** (needs Docker):
+
+```bash
+docker compose up --build        # then open http://localhost:8080
+```
+
+This shows recorded data from 2026-09-24 on a clock started then, with no network access. For live
+data, fetch it with the CLI first, then point the container at the CLI's cache (it only reads it):
+
+```bash
+dotnet run --project src/Sky.Cli -- passes
+SKY_CACHE_DIR="$HOME/Library/Application Support/sky/celestrak" SKY_CLOCK_START= docker compose up --build
+```
+
+**The command line** (needs the [.NET 10 SDK](https://dotnet.microsoft.com/download)):
 
 ```bash
 dotnet test --solution Sky.slnx                        # every test runs offline
@@ -23,16 +37,20 @@ dotnet run --project src/Sky.Cli -- passes --visible   # only the passes you can
 dotnet run --project src/Sky.Cli -- passes --sat 48274 --count 3 --min-elevation 30
 ```
 
-The first run downloads the `stations` group from CelesTrak and caches it. Later runs reuse
-the cache for 6 hours. Sky never requests the same data within 2 hours of its last request,
-even across restarts or an interrupted run, and it stops and asks for a person if CelesTrak
-answers with an error. That holds for one process at a time; two copies started at the same
-moment against one cache could each make a request.
+**The dashboard without Docker**, for development: run the API (`dotnet run --project src/Sky.Api
+--urls http://localhost:5080`) and the web app (`npm run dev` in `web/`); see `web/README.md`.
+
+The CLI's first run downloads the `stations` group from CelesTrak and caches it. Later runs reuse
+the cache for 6 hours. Sky never requests the same data within 2 hours of its last request, even
+across restarts, an interrupted run, or the CLI and the API running side by side on one machine,
+and it stops and asks for a person if CelesTrak answers with an error. The Docker image never
+contacts CelesTrak at all.
 
 To use your own location, copy `src/Sky.Cli/appsettings.Local.example.json` to
-`appsettings.Local.json` in the same folder and edit it. That file is gitignored. The time
-zone must be an IANA name such as `America/Phoenix`. A misspelled setting name is an error,
-so a typo cannot silently fall back to the Phoenix default.
+`appsettings.Local.json` in the same folder and edit it; the API reads the same file. It is
+gitignored and never goes into the Docker image; for the container, put `SKY_Observer__*` variables
+in a gitignored `.env.observer` file. The time zone must be an IANA name such as `America/Phoenix`.
+A misspelled setting name is an error, so a typo cannot silently fall back to the Phoenix default.
 
 ## How the math is verified
 
