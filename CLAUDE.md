@@ -42,8 +42,9 @@ verification story must be strong enough to explain to a stranger.
    Live map with ground track, telemetry panel, 7-day pass table, polar sky
    plot. Dark mission-control look, mobile-friendly. The Docker image never
    contacts CelesTrak (ADR 0004).
-4. **Alerts and polish.** Optional notifications, hiring-manager README,
-   Playwright E2E tests.
+4. **Alerts and polish.** Built, in review. Plan: `docs/plans/milestone-4-proposal.md`.
+   Browser notifications, an iCalendar export with alarms, the hiring-manager
+   README, and Playwright E2E tests.
 
 ## Stack
 
@@ -112,6 +113,8 @@ docker compose up --build                         # offline demo on http://local
 dotnet run --project src/Sky.Api --urls http://localhost:5080   # the API (reads the CLI's settings)
 cd web && npm ci && npm run dev                   # the web app, proxying /api to :5080
 cd web && npm run typecheck && npm run lint && npm test && npm run build
+cd web && npx playwright install chromium && npm run e2e   # browser tests; start the API offline themselves
+cd web && npm run screenshots                     # docs/images, public Capitol observer only
 ```
 
 Never run the API or the CLI online in tests, screenshots, or experiments: use
