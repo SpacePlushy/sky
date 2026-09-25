@@ -24,4 +24,16 @@ public sealed record PassSearchResult(IReadOnlyList<SatellitePass> Passes, Sgp4E
     /// <see cref="Passes"/>.
     /// </summary>
     public DateTimeOffset? AboveMinimumAtEndUntil { get; init; }
+
+    /// <summary>
+    /// When <see cref="AboveMinimumAtStartSince"/> is set and that long pass sets within reach,
+    /// where it sets. Null otherwise.
+    /// </summary>
+    public PassEvent? SetOfPassUpAtStart { get; init; }
+
+    /// <summary>
+    /// When <see cref="AboveMinimumAtEndUntil"/> is set (or SGP4 stopped the search during a pass)
+    /// and that pass's rise was found, where it rises. Null otherwise.
+    /// </summary>
+    public PassEvent? RiseOfPassUpAtEnd { get; init; }
 }

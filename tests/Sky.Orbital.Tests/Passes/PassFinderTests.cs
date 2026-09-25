@@ -77,6 +77,7 @@ public class PassFinderTests
             Assert.Equal(pass.Rise.Time, first.Rise.Time, TimeSpan.FromMilliseconds(2));
             Assert.Equal(pass.Set.Time, first.Set.Time, TimeSpan.FromMilliseconds(2));
             Assert.Equal(pass.Culmination.ElevationDegrees, first.Culmination.ElevationDegrees, 1e-6);
+            Assert.Equal(pass.Culmination.Time, first.Culmination.Time, TimeSpan.FromSeconds(3e-4));
             Assert.Null(found.AboveMinimumAtStartSince);
         }
     }
@@ -128,6 +129,79 @@ public class PassFinderTests
         Assert.NotNull(result.AboveMinimumAtStartSince);
         Assert.NotNull(result.AboveMinimumAtEndUntil);
         Assert.Equal(t - PassFinder.MaximumExtension, result.AboveMinimumAtStartSince!.Value);
+    }
+
+    [Theory]
+    [InlineData(-30.0)] // drifting away: long passes end, so a set follows a day or more of being up
+    [InlineData(30.0)]  // drifting closer: a rise is followed by a day or more of being up
+    public void A_pass_longer_than_a_day_reports_the_end_it_can_find_and_nothing_false(double longitudeOffset)
+    {
+        // Vallado case 24208, ITALSAT 2: a geostationary satellite with 3.85° of inclination that
+        // drifts in longitude, seen from 40° N, 30° west or east of its subpoint. Pick a crossing
+        // time C at which elevation falls (or rises) through a level it stays above for the whole
+        // day before (or after), and make that level the minimum: a pass longer than the one-day
+        // extension that sets (or rises) exactly at C.
+        var italsat = Tle.Parse(
+            "1 24208U 96044A   06177.04061740 -.00000094  00000-0  10000-3 0  1600",
+            "2 24208   3.8536  80.0121 0026640 311.0977  48.3000  1.00778054 36119");
+        var propagator = Sgp4Propagator.Create(italsat);
+        var epoch = italsat.Epoch;
+        var subpoint = Wgs84.FromEcef(EarthRotation.TemeToEcef(propagator.Propagate(epoch).State, epoch).Position);
+        var observer = new TopocentricFrame(new Geodetic(40.0, subpoint.LongitudeDegrees + longitudeOffset, 0.0));
+        double Elevation(DateTimeOffset t) => observer.LookAt(EarthRotation.TemeToEcef(propagator.Propagate(t).State, t)).ElevationDegrees;
+
+        bool sets = longitudeOffset < 0;
+        int direction = sets ? -1 : +1; // where the long stretch above the minimum lies, from C
+        DateTimeOffset? found = null;
+        for (var c = epoch.AddDays(1.2); c < epoch.AddDays(4) && found is null; c = c.AddSeconds(10))
+        {
+            double level = Elevation(c);
+            bool crossing = sets ? Elevation(c.AddSeconds(-10)) > level && Elevation(c.AddSeconds(10)) < level
+                                 : Elevation(c.AddSeconds(-10)) < level && Elevation(c.AddSeconds(10)) > level;
+            if (crossing && Enumerable.Range(1, (86400 / 60) + 2).All(m => Elevation(c.AddMinutes(m * direction)) > level))
+            {
+                found = c;
+            }
+        }
+
+        Assert.True(found.HasValue, "No suitable crossing in the scanned days.");
+        var crossingTime = found!.Value;
+        double minimum = Elevation(crossingTime);
+
+        if (sets)
+        {
+            // Starting 15 s after the set: the satellite is below the minimum, so nothing is up at
+            // the start, whatever the 10 s grid's alignment with the set.
+            foreach (double after in new[] { 5.0, 15.0, 25.0 })
+            {
+                var start = crossingTime.AddSeconds(after);
+                var result = PassFinder.Find(propagator, observer, start, start.AddHours(6), minimum);
+                Assert.Null(result.AboveMinimumAtStartSince);
+                Assert.Null(result.SetOfPassUpAtStart);
+            }
+
+            // Starting an hour before the set: up for over a day, so no rise to report, but the set is.
+            var early = PassFinder.Find(propagator, observer, crossingTime.AddHours(-1), crossingTime.AddHours(5), minimum);
+            Assert.NotNull(early.AboveMinimumAtStartSince);
+            Assert.NotNull(early.SetOfPassUpAtStart);
+            Assert.Equal(crossingTime, early.SetOfPassUpAtStart!.Value.Time, TimeSpan.FromMilliseconds(1.001));
+            Assert.DoesNotContain(early.Passes, p => p.Rise.Time <= crossingTime && crossingTime <= p.Set.Time);
+        }
+        else
+        {
+            foreach (double before in new[] { 5.0, 15.0, 25.0 })
+            {
+                var end = crossingTime.AddSeconds(-before);
+                var result = PassFinder.Find(propagator, observer, end.AddHours(-6), end, minimum);
+                Assert.Null(result.AboveMinimumAtEndUntil);
+                Assert.Null(result.RiseOfPassUpAtEnd);
+            }
+
+            var late = PassFinder.Find(propagator, observer, crossingTime.AddHours(-5), crossingTime.AddHours(1), minimum);
+            Assert.NotNull(late.AboveMinimumAtEndUntil);
+            Assert.NotNull(late.RiseOfPassUpAtEnd);
+            Assert.Equal(crossingTime, late.RiseOfPassUpAtEnd!.Value.Time, TimeSpan.FromMilliseconds(1.001));
+        }
     }
 
     [Fact]
@@ -185,6 +259,28 @@ public class PassFinderTests
         Assert.InRange((pass.Culmination.Time - t0).TotalSeconds, -2.1e-4, 2.1e-4);
         Assert.InRange(shortfall, 0.0, pass.PeakElevationUncertaintyDegrees);
         Assert.True(pass.PeakElevationUncertaintyDegrees < 3e-4, $"Uncertainty {pass.PeakElevationUncertaintyDegrees} is larger than the analysis allows.");
+    }
+
+    [Theory]
+    [InlineData(89.9, 5.00)]
+    [InlineData(89.99, 5.00)]
+    [InlineData(89.9, 3.15)]
+    public void A_pass_grazing_a_minimum_near_the_zenith_is_found(double minimum, double secondsOffGrid)
+    {
+        // The hardest grazing case for the rate bound: elevation changes about 1 degree per second
+        // near the zenith, so a minimum just below 90° is cleared for well under a second, between
+        // 10 s samples that are all far below it.
+        var t0 = WindowStart.AddHours(5);
+        var subpoint = Wgs84.FromEcef(EarthRotation.TemeToEcef(Iss.Propagate(t0).State, t0).Position);
+        var observer = new TopocentricFrame(subpoint with { HeightKm = 0 });
+        var start = t0.AddTicks(-(long)Math.Round((1800 + secondsOffGrid) * TimeSpan.TicksPerSecond));
+
+        var pass = Assert.Single(PassFinder.Find(Iss, observer, start, start.AddHours(1), minimum).Passes);
+
+        Assert.Equal(minimum, pass.Rise.ElevationDegrees, CrossingElevationTolerance);
+        Assert.Equal(minimum, pass.Set.ElevationDegrees, CrossingElevationTolerance);
+        Assert.True(pass.Rise.Time < pass.Culmination.Time && pass.Culmination.Time < pass.Set.Time);
+        Assert.InRange((pass.Culmination.Time - t0).TotalSeconds, -2.1e-4, 2.1e-4);
     }
 
     [Fact]

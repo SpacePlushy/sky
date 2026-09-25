@@ -43,10 +43,11 @@ namespace Sky.Orbital.Passes;
 /// <b>Passes in progress.</b> A pass already above the minimum when the search starts is followed
 /// backward in 10 s steps, for up to <see cref="MaximumExtension"/>, to find its real rise; one
 /// still up at the end is followed forward the same way. Every pass that is up at any moment of the
-/// search window is reported. A satellite that stays up for the whole extension, such as a
-/// geostationary one, has no rise or set to report; the result says so through
+/// search window is reported. A pass that lasts longer than the extension has no rise or no set to
+/// report, so it is not in the list; the result says so through
 /// <see cref="PassSearchResult.AboveMinimumAtStartSince"/> and
-/// <see cref="PassSearchResult.AboveMinimumAtEndUntil"/>.
+/// <see cref="PassSearchResult.AboveMinimumAtEndUntil"/>, and gives the end it did find, if any,
+/// as <see cref="PassSearchResult.SetOfPassUpAtStart"/> or <see cref="PassSearchResult.RiseOfPassUpAtEnd"/>.
 /// </para>
 /// <para>
 /// If SGP4 fails, for example because the satellite has decayed, sampling stops there and the result
@@ -99,9 +100,12 @@ public static class PassFinder
         double minimum = minimumElevationDegrees;
         long maxExtensionSteps = MaximumExtension.Ticks / Step.Ticks;
 
-        // Backward from the start: the guard samples, then on while the satellite is still up.
-        var samples = Extend(propagator, observer, start, -1, minimum, maxExtensionSteps);
+        // Backward from the start: the guard samples, then on while the satellite has been up
+        // without a break since the start.
+        bool upAtStart = Observe(propagator, observer, start) is { } atStart && atStart.Event.ElevationDegrees >= minimum;
+        var samples = Extend(propagator, observer, start, -1, minimum, maxExtensionSteps, upAtStart);
         samples.Reverse();
+        int startIndex = samples.Count;
 
         // Through the window on the grid start + k·step.
         Sgp4Error stoppedBy = Sgp4Error.None;
@@ -122,10 +126,17 @@ public static class PassFinder
         }
 
         // Forward past the end the same way, unless SGP4 already stopped the search.
+        int endIndex = samples.Count - 1;
         if (stoppedAt is null)
         {
-            samples.AddRange(Extend(propagator, observer, lastInWindow, +1, minimum, maxExtensionSteps));
+            bool upAtEnd = endIndex >= 0 && samples[endIndex].Event.ElevationDegrees >= minimum;
+            samples.AddRange(Extend(propagator, observer, lastInWindow, +1, minimum, maxExtensionSteps, upAtEnd));
         }
+
+        PassEvent? setOfPassUpAtStart = null;
+        PassEvent? riseOfPassUpAtEnd = null;
+        bool startUnresolved = false;
+        bool endUnresolved = false;
 
         var passes = new List<SatellitePass>();
         int i = 0;
@@ -140,16 +151,26 @@ public static class PassFinder
                 }
 
                 int last = i - 1;
-                if (first == 0 || i == samples.Count)
+
+                // A run reaching the first or last sample has no sample below the minimum on that side:
+                // its rise or set is beyond the extension (or where SGP4 failed). Such a run matters
+                // only if it contains the window's edge; one that does not is an artifact of the guard
+                // samples, outside the window.
+                bool openStart = first == 0;
+                bool openEnd = i == samples.Count;
+                if ((openStart && !(first <= startIndex && startIndex <= last)) || (openEnd && !(first <= endIndex && endIndex <= last)))
                 {
-                    continue; // no sample below the minimum on one side: the rise or set is out of reach
+                    continue;
                 }
+
+                startUnresolved |= openStart;
+                endUnresolved |= openEnd && stoppedAt is null;
 
                 // The run can hide dips below the minimum between two of its samples, which split it
                 // into separate passes. Each segment is bounded by a sample below the minimum or by
-                // the bottom of a dip, both below it.
+                // the bottom of a dip, both below it, or is open where the run is.
                 int segmentStart = first;
-                DateTimeOffset below = samples[first - 1].Event.Time;
+                DateTimeOffset? below = openStart ? null : samples[first - 1].Event.Time;
                 for (int k = first; k <= last; k++)
                 {
                     DateTimeOffset? dip = k < last ? DipBelow(propagator, observer, samples[k], samples[k + 1], minimum) : null;
@@ -158,13 +179,25 @@ public static class PassFinder
                         continue;
                     }
 
-                    DateTimeOffset after = dip ?? samples[last + 1].Event.Time;
-                    Sample peak = HighestRefinedPeak(propagator, observer, samples, segmentStart, k, below, after);
-                    DateTimeOffset riseBracketEnd = peak.Event.Time < samples[segmentStart].Event.Time ? peak.Event.Time : samples[segmentStart].Event.Time;
-                    DateTimeOffset setBracketStart = peak.Event.Time > samples[k].Event.Time ? peak.Event.Time : samples[k].Event.Time;
-                    PassEvent rise = Crossing(propagator, observer, below, riseBracketEnd, minimum);
-                    PassEvent set = Crossing(propagator, observer, setBracketStart, after, minimum);
-                    passes.Add(new SatellitePass(rise, peak.Event, set, PeakUncertaintyDegrees(peak)));
+                    DateTimeOffset? after = dip ?? (openEnd ? null : samples[last + 1].Event.Time);
+                    if (below is { } from && after is { } to)
+                    {
+                        Sample peak = HighestRefinedPeak(propagator, observer, samples, segmentStart, k, from, to);
+                        DateTimeOffset riseBracketEnd = peak.Event.Time < samples[segmentStart].Event.Time ? peak.Event.Time : samples[segmentStart].Event.Time;
+                        DateTimeOffset setBracketStart = peak.Event.Time > samples[k].Event.Time ? peak.Event.Time : samples[k].Event.Time;
+                        PassEvent rise = Crossing(propagator, observer, from, riseBracketEnd, minimum);
+                        PassEvent set = Crossing(propagator, observer, setBracketStart, to, minimum);
+                        passes.Add(new SatellitePass(rise, peak.Event, set, PeakUncertaintyDegrees(peak)));
+                    }
+                    else if (after is { } setBracketEnd)
+                    {
+                        setOfPassUpAtStart = Crossing(propagator, observer, samples[k].Event.Time, setBracketEnd, minimum);
+                    }
+                    else if (below is { } riseBracketStart)
+                    {
+                        riseOfPassUpAtEnd = Crossing(propagator, observer, riseBracketStart, samples[segmentStart].Event.Time, minimum);
+                    }
+
                     segmentStart = k + 1;
                     below = after;
                 }
@@ -191,26 +224,26 @@ public static class PassFinder
         // grazing pass just outside it, which is not the caller's concern.
         var inWindow = passes.Where(p => p.Set.Time >= start && p.Rise.Time <= end).ToList();
 
-        // An outermost sample still at or above the minimum means a rise or set was out of reach:
-        // the extension ran out, or SGP4 failed before the satellite went below the minimum.
-        bool startUnresolved = samples.Count > 0 && samples[0].Event.ElevationDegrees >= minimum;
-        bool endUnresolved = stoppedAt is null && samples.Count > 0 && samples[^1].Event.ElevationDegrees >= minimum;
         return new PassSearchResult(inWindow, stoppedBy, stoppedAt)
         {
             AboveMinimumAtStartSince = startUnresolved ? samples[0].Event.Time : null,
             AboveMinimumAtEndUntil = endUnresolved ? samples[^1].Event.Time : null,
+            SetOfPassUpAtStart = setOfPassUpAtStart,
+            RiseOfPassUpAtEnd = riseOfPassUpAtEnd,
         };
     }
 
     /// <summary>
     /// Samples away from <paramref name="origin"/> in one direction: always the guard samples, then
-    /// on while the satellite is at or above the minimum, up to the extension limit. Stops early if
-    /// SGP4 fails. Returned in order of distance from the origin.
+    /// on for as long as the satellite has been at or above the minimum without a break since the
+    /// origin, up to the extension limit. Stops early if SGP4 fails. Returned in order of distance
+    /// from the origin.
     /// </summary>
     private static List<Sample> Extend(
-        Sgp4Propagator propagator, TopocentricFrame observer, DateTimeOffset origin, int direction, double minimum, long maxSteps)
+        Sgp4Propagator propagator, TopocentricFrame observer, DateTimeOffset origin, int direction, double minimum, long maxSteps, bool upAtOrigin)
     {
         var extension = new List<Sample>();
+        bool unbroken = upAtOrigin;
         for (long k = 1; k <= maxSteps; k++)
         {
             Sample? sample = Observe(propagator, observer, origin + (Step * (k * direction)));
@@ -220,7 +253,8 @@ public static class PassFinder
             }
 
             extension.Add(sample.Value);
-            if (k >= GuardSamples && sample.Value.Event.ElevationDegrees < minimum)
+            unbroken &= sample.Value.Event.ElevationDegrees >= minimum;
+            if (k >= GuardSamples && !unbroken)
             {
                 break;
             }
