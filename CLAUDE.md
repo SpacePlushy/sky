@@ -29,7 +29,8 @@ verification story must be strong enough to explain to a stranger.
 1. **Orbital core.** Done, in review. Plan: `docs/plans/milestone-1-proposal.md`.
    CelesTrak GP fetch (JSON/OMM) with a policy-enforcing cache, Vallado's
    reference SGP4 (ADR 0001), TEME to Earth-fixed to geodetic and topocentric,
-   and a CLI that prints the ISS position and next 5 passes (coarse, 10 s).
+   and a CLI that prints the ISS position and next 5 passes (rise and set on a
+   10 s grid, peaks refined to 0.1 s).
 2. **Pass prediction.** Rise, max elevation, and set with root-finding
    refinement. Visibility means satellite sunlit and sun below -6 degrees at
    the observer. Target accuracy is a few seconds against reference tools.
@@ -72,8 +73,10 @@ verification story must be strong enough to explain to a stranger.
 
 The owner's bar is that the math is correct, with no errors and no band-aid fixes.
 
-- Every math function gets a published reference test **and** invariant tests
-  over seeded random inputs (round trips, derivatives, symmetries).
+- Every math function gets a test against an independent reference (a
+  published worked example, or Skyfield where no usable example exists) **and**
+  invariant tests over seeded random inputs (round trips, derivatives,
+  symmetries).
 - Tolerances come from error analysis written in the test comment, decided
   before the test first runs. Never loosen a tolerance to make a test pass.
 - When a test fails, find the root cause and measure it. If a reference source

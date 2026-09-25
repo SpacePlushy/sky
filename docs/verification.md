@@ -75,21 +75,29 @@ Phoenix observer at 133 instants across 3 days, including every 20 s through a 6
 Both velocity figures match the prediction exactly: Skyfield subtracts Earth rotation at the
 IERS nominal rate, which differs from Sky's GMST rate by 8.6×10⁻¹² rad/s.
 
-### Pass finding (Milestone 1, coarse)
+### Pass finding (Milestone 1)
 
-The finder samples every 10 s. Its bounds follow from the step and from the curvature of the
-elevation curve, measured in Skyfield's data as at most 0.0202°/s² at the 68.8° peak.
+Rise and set come from 10 s samples. Each peak is then searched in 0.1 s steps within one
+coarse step of the best sample. Elevation near the zenith changes about 1° per second, so a
+10 s grid alone could miss an overhead peak by up to 5°. The bounds follow from that design.
+The line of sight to the ISS turns at most 7.7 km/s ÷ 410 km, which is 1.08°/s.
 
-| Check against Skyfield's 25 passes over 7 days | Bound | Measured |
+The reference events are Skyfield's, computed with UT1 = UTC as Sky's production path is.
+Each was refined with Skyfield's own altitude function to under a microsecond, because
+`find_events` stops at half a second, and its times were up to 0.22 s from the true crossings.
+
+| Check | Bound | Measured |
 |---|---|---|
-| Rise is late by | 0 to 10 s | 0.21 to 9.98 s |
-| Set is early by | 0 to 10 s | 0.23 to 9.77 s |
-| Peak time | Within 10 s | Within 4.99 s |
-| Peak elevation is low by | 0 to 0.6° | −0.0012° to 0.31° |
+| Rise is late by, over 25 passes in 7 days | 0 to 10 s | 0.238 to 9.993 s |
+| Set is early by | 0 to 10 s | 0.209 to 9.551 s |
+| Peak time | Within 0.1 s | Within 0.046 s |
+| Peak elevation is low by | 0 to 0.054° | 0 to 0.00003° |
+| Observer directly under the ground track | Peak 90° at the overhead instant, within 0.1 s and 0.06° | 90.0000°, within 0.001 s |
 | Passes whose peak clears 30° | Exactly Skyfield's 12 | 12 |
+| A decaying satellite | Search stops and reports the SGP4 error | Reports `Decayed` |
 
-The −0.0012° is the reference's UT1 offset, allowed for by a 0.01° margin. Milestone 2
-replaces this finder with root-finding.
+A pass already in progress when a search starts is not listed; `sky now` reports it as in
+progress. Milestone 2 replaces the 10 s rise and set grid with root-finding.
 
 ### CelesTrak data and policy
 
@@ -97,7 +105,7 @@ replaces this finder with root-finding.
 |---|---|
 | OMM parsing | A real `GROUP=stations` response, 22 records, including 6-digit catalog numbers |
 | Refuses SGP4-XP (ephemeris type 4) | SGP4 would propagate those elements to wrong positions without error |
-| Every cache rule | 21 tests with a fake clock and a scripted fake server that records each request |
+| Every cache rule | 23 tests with a fake clock and a scripted fake server that records each request, including a run interrupted mid-request and an unreadable state file |
 
 The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 
@@ -122,7 +130,8 @@ The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
   exact trajectories, and a characterization test bounds the SGP4 gap at 3 cm/s.
 - **SGP4 itself is accurate to about a kilometer at epoch**, degrading by kilometers per day
   of element age. Every figure above measures Sky's implementation, not SGP4's physics.
-- **Milestone 1 pass times are coarse**, as bounded above.
+- **Milestone 1 rise and set times are coarse**, as bounded above, and a pass already in
+  progress is not listed by `sky passes`.
 
 ## Issues found in reference sources
 
@@ -136,10 +145,11 @@ These came to light because tests failed. Each was traced to its source and meas
    Julian date of midnight plus fraction minus 2433281.5, which rounds by up to about 20 µs.
    For the very eccentric deep-space satellite 23333 that moved results by 4 mm. Sky
    reproduces the arithmetic exactly.
-3. **Vallado 2006 Appendix C holds UT1 as one rounded double.** JD(UTC) + ΔUT1/86400,
-   rounded twice, lands 22.79 µs after the exact instant: 13.2 mm at that radius. The test
-   feeds Sky the same double, and a separate test shows Sky's split Julian date keeps the
-   exact instant.
+3. **Vallado 2006 Appendix C holds UT1 as one double.** Its printed Julian date,
+   2453101.82740678310, is the nearest double to the published UT1 (07:51:27.9460471, from
+   UTC 07:51:28.386009 and UT1 − UTC = −0.4399619 s). A double near JD 2.45 million resolves
+   only 40 µs, and this one is 14.69 µs late: 8.5 mm at that radius. The tests feed Sky the
+   same double, and a separate test shows Sky's split Julian date keeps the exact instant.
 4. **python-sgp4 2.27 stores OMM epochs up to about 0.4 µs late.** It divides float seconds
    by 86400: 0.3641 µs here, which is 2.79 mm along track. The reference generator sets the
    exact epoch and records the rounding.
@@ -149,6 +159,9 @@ These came to light because tests failed. Each was traced to its source and meas
 6. **Skyfield 1.55's built-in UT1 − UTC is out of date** for September 2026: +0.096 s,
    against −0.0135 s observed by IERS. The tests give Sky Skyfield's own value, so they check
    the math either way.
+7. **Skyfield's `find_events` stops refining at half a second.** Its rise, set, and peak
+   times were up to 0.22 s from the true events. The generator refines them with Skyfield's
+   own altitude function.
 
 ## Changes from the approved plan
 
@@ -163,6 +176,15 @@ These came to light because tests failed. Each was traced to its source and meas
 - **OMM vs TLE** uses Vallado case 00005 written as OMM, and the real ISS record against
   Skyfield, instead of a paired download, which would cost two CelesTrak requests.
 - **GMST** removes rounding noise the first version had (about 10⁻¹¹ rad).
+- **Pass peaks** are refined in 0.1 s steps. Decision D3 had the whole finder on a 10 s grid,
+  but that cannot meet the plan's own "peak within about 1°" for passes above about 78°.
+  Rise and set stay on the 10 s grid.
+- **Look angles** are not checked against Vallado Example 7-1. That example's published answer
+  is an inertial vector produced through the full IAU-76/FK5 reduction, which Sky does not
+  implement. Look angles are checked instead by exact geometry and against Skyfield, to
+  5×10⁻¹¹°.
+- **The UT1 = UTC check** uses a per-sample bound derived from the Earth's rotation over
+  UT1 − UTC, instead of the plan's flat 50 m and 20″, which assumed today's −0.015 s.
 
 ## Reference data
 

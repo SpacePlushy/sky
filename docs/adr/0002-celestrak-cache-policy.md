@@ -20,7 +20,7 @@ request per call and never retries.
 | Rule | Value |
 |---|---|
 | Refresh | On demand, when cached data is over 6 hours old |
-| Minimum interval | 2 hours after the last request for that group, even when forced |
+| Minimum interval | 2 hours after the last request for that group, even when forced. The attempt is recorded on disk before the request is sent, so an interrupted run still counts. |
 | Any non-200 answer, or a 200 without valid element sets | Block that group until a person runs `sky unblock`; report the answer word for word; keep serving cached data |
 | No answer at all (network failure or timeout) | Back off 2, 4, 8, 16, then 24 hours; a success resets it |
 | Redirects | Not followed, so a 301 surfaces as an error |
@@ -33,7 +33,9 @@ so it never downloads a group it does not need.
 
 ## Consequences
 
-- Sky cannot exceed CelesTrak's limits from one machine, and cannot silently accumulate errors.
+- One process at a time cannot exceed CelesTrak's limits, even across restarts or interrupted
+  runs, and cannot silently accumulate errors. Two processes running at the same moment against
+  one cache directory could each make a request; see below.
 - A CelesTrak outage that returns 5xx needs a person to run `sky unblock`. That is deliberate:
   the policy asks for a human in the loop on any non-200 answer.
 - Two processes sharing one cache directory are not coordinated. Milestone 3's server will run
