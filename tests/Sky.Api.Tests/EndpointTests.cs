@@ -45,6 +45,7 @@ public sealed class EndpointTests : IDisposable
         Assert.Equal(25544, json.GetProperty("satellites")[0].GetInt64());
         Assert.True(json.GetProperty("offline").GetBoolean());
         Assert.False(json.GetProperty("clockSimulated").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("clockStartUtc").ValueKind);
         Assert.Equal("2026-09-24T04:00:00Z", json.GetProperty("serverTimeUtc").GetString());
     }
 

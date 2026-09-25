@@ -56,6 +56,7 @@ api.MapGet("/config", (SatelliteService service) =>
         s.Satellites,
         s.Offline,
         s.ClockStartUtc is not null,
+        s.ClockStartUtc is { } start ? SatelliteService.Utc(start) : null,
         SatelliteService.Utc(service.Now)));
 });
 

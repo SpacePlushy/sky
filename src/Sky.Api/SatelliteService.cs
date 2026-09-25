@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sky.CelesTrak;
 using Sky.Orbital;
 using Sky.Orbital.Astronomy;
@@ -280,6 +281,12 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             if (age > 3)
             {
                 warnings.Add($"{record.Name} elements are {age:F1} days old; predictions degrade by kilometers per day of element age.");
+            }
+            else if (age < -1.0 / 1440)
+            {
+                // Elements from after "now": the clock is simulated or wrong. SGP4 propagates
+                // backward as well as forward, so the predictions stand, but it is worth knowing.
+                warnings.Add(string.Create(CultureInfo.InvariantCulture, $"{record.Name} elements are from {-age * 24:F1} hours after the clock's time; is the clock simulated or wrong?"));
             }
 
             return (record, warnings);

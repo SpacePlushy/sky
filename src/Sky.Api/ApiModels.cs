@@ -12,6 +12,7 @@ internal sealed record ConfigResponse(
     IReadOnlyList<long> Satellites,
     bool Offline,
     bool ClockSimulated,
+    DateTime? ClockStartUtc,
     DateTime ServerTimeUtc);
 
 /// <summary>Where the observer is and which zone to show times in.</summary>
