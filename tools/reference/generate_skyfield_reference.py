@@ -126,7 +126,7 @@ def utc_text(instant):
 
 
 def find_refined_passes(ts, sat, observer, start, end):
-    """Complete passes above 10 degrees, with each event refined well below a microsecond."""
+    """Complete passes above 10 degrees: rise and set refined to under a microsecond, peaks to tens of microseconds."""
     origin = start
 
     def at(seconds):
@@ -312,7 +312,7 @@ def main():
             "ut1_minus_utc_s is what Skyfield's built-in tables give for each instant, and Sky's tests feed the same value to Sky, so the comparison checks the math whatever UT1 is.",
             "Skyfield 1.55's built-in UT1-UTC for these dates (about +0.096 s) is out of date: IERS Bulletin A of 24 September 2026 (Vol. XXXIX No. 039) gives -0.013473 s observed on 2026-09-24. Real-world figures for Sky's assumption A5 use the IERS value.",
             "Look angles are geometric: no refraction, no light-time.",
-            "Pass events use a second timescale with UT1 = UTC (Sky's production assumption). Each event from Skyfield's find_events (which stops within half a second) is refined with Skyfield's own altitude function: bisection for rise and set to under 1 microsecond, golden-section search for the peak to about 10 microseconds. find_events' own times are kept under find_events.",
+            "Pass events use a second timescale with UT1 = UTC (Sky's production assumption). Each event from Skyfield's find_events (which stops within half a second) is refined with Skyfield's own altitude function: bisection for rise and set to under 1 microsecond, golden-section search for the peak, whose time is reproducible to tens of microseconds because elevation is flat there. find_events' own times are kept under find_events.",
         ],
         "elements": ISS_OMM,
         "observer": OBSERVER,

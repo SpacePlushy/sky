@@ -30,7 +30,8 @@ moment against one cache could each make a request.
 
 To use your own location, copy `src/Sky.Cli/appsettings.Local.example.json` to
 `appsettings.Local.json` in the same folder and edit it. That file is gitignored. The time
-zone must be an IANA name such as `America/Phoenix`.
+zone must be an IANA name such as `America/Phoenix`. A misspelled setting name is an error,
+so a typo cannot silently fall back to the Phoenix default.
 
 ## How the math is verified
 
@@ -43,8 +44,13 @@ Correctness is checked at every step, against sources that share no code with Sk
 - **The full pipeline** matches Skyfield, an independent Python library, to under a
   millimeter and 10⁻¹⁰ degrees for the ISS over Phoenix.
 - **Pass predictions** match Skyfield's 25 passes over 7 days within the finder's stated
-  bounds: rise and set within 10 s, and peaks within 0.1 s and a per-satellite elevation
-  bound (0.061° for the ISS).
+  bounds: rise and set within 10 s, and peaks within 0.1 s and an elevation uncertainty the
+  finder computes for each pass. Milestone 2 replaces the 10 s rise and set grid with
+  root-finding.
+
+These figures measure Sky's implementation of SGP4, not SGP4's physics. SGP4 itself is
+accurate to about a kilometer at the element set's epoch, and degrades by kilometers per day
+as the elements age.
 
 Every tolerance was set from analysis before its test ran. Tests run on Linux, macOS, and
 Windows on every push, and weekly. Details, measured results, and the issues this process

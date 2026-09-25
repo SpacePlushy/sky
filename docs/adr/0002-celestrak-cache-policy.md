@@ -21,11 +21,14 @@ request per call and never retries.
 |---|---|
 | Refresh | On demand, when cached data is over 6 hours old |
 | Minimum interval | 2 hours after the last request for that group, even when forced. The attempt is recorded on disk before the request is sent, so an interrupted run still counts. |
-| Any non-200 answer, or a 200 without valid element sets | Block that group until a person runs `sky unblock`; report the answer word for word; keep serving cached data |
-| No answer at all (network failure or timeout) | Back off 2, 4, 8, 16, then 24 hours; a success resets it |
+| Any non-200 answer, or a 200 without valid element sets | Block that group until a person runs `sky unblock`; report the answer word for word; keep serving cached data. The status is read before the body, so a non-200 whose body is lost still blocks. |
+| No answer at all (network failure or timeout), or a 200 whose body is lost | Back off 2, 4, 8, 16, then 24 hours. Any answer from CelesTrak resets the count. |
+| Timeouts | 30 s for the status and headers, then 30 s more for the body |
 | Redirects | Not followed, so a 301 surfaces as an error |
 | Writes | Only validated responses are written, via a temporary file and rename |
-| State | On disk next to the data, so the rules hold across restarts |
+| State | On disk next to the data, so the rules hold across restarts. A relative cache directory resolves against the settings folder, so every run shares one state. |
+| Unreadable state file | Treated as blocked, since it may have recorded a block, with its modification time as the last request |
+| Clock moved back | A last request recorded in the future counts from now and is saved, so the group is not locked out until that date. Data downloaded in the future counts as due. |
 | Stale data | Warn when the newest epoch is over 3 days old |
 
 The CLI searches groups in order and stops at the first that holds the requested satellite,

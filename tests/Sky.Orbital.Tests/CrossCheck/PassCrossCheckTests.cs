@@ -8,7 +8,7 @@ namespace Sky.Orbital.Tests.CrossCheck;
 /// Milestone 1's pass finder against refined Skyfield pass events for the ISS over Phoenix, 7 days
 /// from 2026-09-24 04:00 UTC. The reference events use UT1 = UTC, as Sky's production path does,
 /// and are refined with Skyfield's own altitude function (rise and set to under a microsecond,
-/// peaks to about 10 microseconds), so the bounds below are exact consequences of the finder's
+/// peaks to tens of microseconds), so the bounds below are exact consequences of the finder's
 /// design, with 1 ms of slack for rounding: rise is the first 10 s sample at or above 10 degrees,
 /// so 0 to 10 s late; set is the last, so 0 to 10 s early; the peak is refined in 0.1 s steps, so
 /// it is within 0.1 s of the true peak and low by at most the pass's stated uncertainty.

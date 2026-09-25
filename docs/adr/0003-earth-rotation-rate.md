@@ -24,11 +24,13 @@ suite checks numerically to 10⁻⁸ km/s.
 
 ## Consequences
 
-- Sky's Earth-fixed velocity differs from Vallado's worked example by 0.066 mm/s. The example
+- Sky's Earth-fixed velocity differs from Vallado's worked example by 0.067 mm/s. The example
   also scales the inertial rate by (1 − LOD/86400) with LOD = 0.0015563 s, so the rates differ
-  by 8.40 × 10⁻¹² rad/s, which predicts 0.0664 mm/s at the example's 7901 km. Against
-  Skyfield's ITRS velocity the difference is up to 0.058 mm/s at ISS radius, also as predicted.
-  Both are covered by 0.1 mm/s tolerances.
+  by 8.40 × 10⁻¹² rad/s. Times the satellite's 7968.6 km distance from the spin axis, that
+  predicts 0.0669 mm/s, almost all in x (0.0664 mm/s) because the satellite sits at
+  y = 7901.3 km. The measured difference is 0.0670 mm/s, 0.0663 mm/s of it in x; the published
+  velocity is rounded to 0.001 mm/s. Against Skyfield's ITRS velocity the difference is up to
+  0.058 mm/s at ISS radius, also as predicted. Both are covered by 0.1 mm/s tolerances.
 - In range rate, the choice of rate enters only through the observer's velocity term,
   Δω (ẑ × r_observer) · (unit line of sight). The satellite's own ω × (line of sight) part is
   perpendicular to the line of sight and drops out. From Phoenix that bounds the difference
