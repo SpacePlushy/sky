@@ -50,6 +50,9 @@ public sealed class SettingsTests : IDisposable
     [InlineData("""{"Observer":{"HeightMeters":12000}}""", "Observer:HeightMeters")]
     [InlineData("""{"Observer":{"TimeZone":"-07:00"}}""", "Observer:TimeZone")]
     [InlineData("""{"Observer":{"TimeZone":"Not/AZone"}}""", "Observer:TimeZone")]
+    [InlineData("""{"Observer":{"TimeZone":"US Mountain Standard Time"}}""", "Observer:TimeZone")] // a Windows ID, not IANA
+    [InlineData("""{"Observer":{"Latitude":33.5}}""", "Observer:Latitude")] // misspelled: not a setting
+    [InlineData("""{"Passes":{"MinimumElevation":20}}""", "Passes:MinimumElevation")]
     [InlineData("""{"Passes":{"MinimumElevationDegrees":90}}""", "Passes:MinimumElevationDegrees")]
     [InlineData("""{"CelesTrak":{"Groups":""}}""", "CelesTrak:Groups")]
     [InlineData("""{"CelesTrak":{"Groups":"stations,../x"}}""", "CelesTrak:Groups")]
@@ -60,6 +63,30 @@ public sealed class SettingsTests : IDisposable
         var error = Assert.Throws<SettingsException>(() => SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix));
 
         Assert.Contains(setting, error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Unknown_keys_from_environment_variables_are_rejected()
+    {
+        // The approved plan's example, SKY_Observer__Latitude, names a key that does not exist.
+        _cli.SetEnvironment("Observer__Latitude", "34.25");
+
+        var error = Assert.Throws<SettingsException>(() => SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix));
+
+        Assert.Contains("Observer:Latitude is not a setting", error.Message, StringComparison.Ordinal);
+        Assert.Contains("LatitudeDegrees", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_relative_cache_directory_resolves_against_the_settings_folder()
+    {
+        // Resolving against the working directory would give each directory its own request history,
+        // so two runs from different folders could both request inside CelesTrak's 2-hour window.
+        _cli.WriteLocal("""{"CelesTrak":{"CacheDirectory":"cache-relative"}}""");
+
+        var settings = SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix);
+
+        Assert.Equal(Path.Combine(_cli.SettingsDirectory, "cache-relative"), settings.CacheDirectory);
     }
 
     [Fact]

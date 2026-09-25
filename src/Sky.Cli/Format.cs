@@ -18,12 +18,23 @@ internal static class Format
     public static string LocalClockTenths(DateTimeOffset instant, TimeZoneInfo zone) =>
         TimeZoneInfo.ConvertTime(instant, zone).ToString("HH:mm:ss.f", CultureInfo.InvariantCulture);
 
-    /// <summary>The next whole second at or after an instant, so sampled times print exactly.</summary>
-    public static DateTimeOffset CeilingToSecond(DateTimeOffset instant)
+    /// <summary>
+    /// The whole second at or before an instant. Searching from there makes every sampled time a
+    /// whole second, so it prints exactly, and cannot skip a pass that rises later in this second.
+    /// </summary>
+    public static DateTimeOffset FloorToSecond(DateTimeOffset instant) =>
+        instant.AddTicks(-(instant.Ticks % TimeSpan.TicksPerSecond));
+
+    /// <summary>The UTC offset suffix for an instant in a zone, such as -06:00.</summary>
+    public static string OffsetSuffix(DateTimeOffset instant, TimeZoneInfo zone)
     {
-        long remainder = instant.Ticks % TimeSpan.TicksPerSecond;
-        return remainder == 0 ? instant : instant.AddTicks(TimeSpan.TicksPerSecond - remainder);
+        ArgumentNullException.ThrowIfNull(zone);
+        TimeSpan offset = zone.GetUtcOffset(instant);
+        return string.Create(CultureInfo.InvariantCulture, $"{(offset < TimeSpan.Zero ? "-" : "+")}{offset.Duration():hh\\:mm}");
     }
+
+    /// <summary>An elevation setting as entered, without rounding, such as 10 or 30.5.</summary>
+    public static string Degrees(double degrees) => degrees.ToString("0.###", CultureInfo.InvariantCulture);
 
     /// <summary>A bound in degrees, rounded up to 3 decimals so the printed value is still a bound.</summary>
     public static string BoundDegrees(double degrees) =>

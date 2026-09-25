@@ -41,6 +41,18 @@ internal sealed partial record SkySettings(
         }
 
         var problems = new List<string>();
+        foreach (var (section, known) in KnownKeys)
+        {
+            foreach (IConfigurationSection child in config.GetSection(section).GetChildren())
+            {
+                if (!known.Contains(child.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    // A misspelled key would otherwise be ignored silently and the default used.
+                    problems.Add($"{section}:{child.Key} is not a setting. {section} settings are: {string.Join(", ", known)}.");
+                }
+            }
+        }
+
         string name = string.IsNullOrWhiteSpace(config["Observer:Name"]) ? "Observer" : config["Observer:Name"]!;
         double latitude = Number(config, "Observer:LatitudeDegrees", -90, 90, problems);
         double longitude = Number(config, "Observer:LongitudeDegrees", -180, 180, problems);
@@ -54,12 +66,21 @@ internal sealed partial record SkySettings(
             throw new SettingsException("Invalid settings:" + Environment.NewLine + string.Join(Environment.NewLine, problems.Select(p => "  " + p)));
         }
 
+        // A relative directory resolves against the settings folder, never the working directory,
+        // so every run shares one request history and one 2-hour rule.
         string cacheDirectory = string.IsNullOrWhiteSpace(config["CelesTrak:CacheDirectory"])
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sky", "celestrak")
-            : config["CelesTrak:CacheDirectory"]!;
+            : Path.GetFullPath(config["CelesTrak:CacheDirectory"]!, settingsDirectory);
 
         return new SkySettings(name, new Geodetic(latitude, longitude, heightMeters / 1000.0), zone!, groups, cacheDirectory, minimumElevation);
     }
+
+    private static readonly (string Section, string[] Keys)[] KnownKeys =
+    [
+        ("Observer", ["Name", "LatitudeDegrees", "LongitudeDegrees", "HeightMeters", "TimeZone"]),
+        ("CelesTrak", ["Groups", "CacheDirectory"]),
+        ("Passes", ["MinimumElevationDegrees"]),
+    ];
 
     private static double Number(IConfiguration config, string key, double minimum, double maximum, List<string> problems)
     {

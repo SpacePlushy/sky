@@ -1,4 +1,6 @@
 using System.CommandLine;
+using System.CommandLine.Parsing;
+using System.Globalization;
 using Sky.CelesTrak;
 using Sky.Orbital.Frames;
 using Sky.Orbital.Passes;
@@ -15,7 +17,11 @@ internal static class SkyCli
         var refresh = new Option<bool>("--refresh") { Description = "Download element sets now, if CelesTrak's 2-hour rule allows." };
         var count = new Option<int>("--count", "-n") { Description = "How many passes to list.", DefaultValueFactory = _ => 5 };
         var days = new Option<int>("--days") { Description = "How many days ahead to search.", DefaultValueFactory = _ => 7 };
-        var minimumElevation = new Option<double?>("--min-elevation") { Description = "Minimum elevation in degrees. Defaults to the Passes:MinimumElevationDegrees setting." };
+        var minimumElevation = new Option<double?>("--min-elevation")
+        {
+            Description = "Minimum elevation in degrees, from 0 to below 90. Defaults to the Passes:MinimumElevationDegrees setting.",
+            CustomParser = ParseElevation,
+        };
         var group = new Argument<string>("group") { Description = "CelesTrak group, such as stations." };
 
         var now = new Command("now", "Where the satellite is now, as seen from the observer.") { satellite, refresh };
@@ -29,8 +35,18 @@ internal static class SkyCli
         var unblock = new Command("unblock", "Allow requests to a CelesTrak group again, after checking why it was blocked.") { group };
         unblock.SetAction((parse, _) => ExecuteAsync(environment, context =>
         {
-            context.Cache.ClearBlock(parse.GetValue(group)!);
-            environment.Out.WriteLine($"Requests for GROUP={parse.GetValue(group)} are allowed again, subject to the 2-hour rule.");
+            string name = parse.GetValue(group)!;
+            try
+            {
+                context.Cache.ClearBlock(name);
+            }
+            catch (ArgumentException ex)
+            {
+                environment.Error.WriteLine(ex.Message);
+                return Task.FromResult(1);
+            }
+
+            environment.Out.WriteLine($"Requests for GROUP={name} are allowed again, subject to the 2-hour rule.");
             return Task.FromResult(0);
         }));
 
@@ -38,6 +54,20 @@ internal static class SkyCli
         return await root.Parse(args).InvokeAsync(
             new InvocationConfiguration { Output = environment.Out, Error = environment.Error },
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Parses --min-elevation with the invariant culture, so 30.5 means the same everywhere.</summary>
+    private static double? ParseElevation(ArgumentResult result)
+    {
+        string token = result.Tokens.Count == 1 ? result.Tokens[0].Value : string.Empty;
+        if (double.TryParse(token, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out double value)
+            && value >= 0 && value < 90)
+        {
+            return value;
+        }
+
+        result.AddError($"--min-elevation must be a number of degrees from 0 to below 90, such as 30.5; got \"{token}\".");
+        return null;
     }
 
     private static async Task<int> ExecuteAsync(CliEnvironment environment, Func<CommandContext, Task<int>> command)
@@ -79,7 +109,7 @@ internal static class SkyCli
         Geodetic subpoint = Wgs84.FromEcef(ecef.Position);
         var frame = new TopocentricFrame(settings.Observer);
         LookAngles look = frame.LookAt(ecef);
-        DateTimeOffset searchStart = Format.CeilingToSecond(t);
+        DateTimeOffset searchStart = Format.FloorToSecond(t);
         PassSearchResult upcoming = CoarsePassFinder.Find(propagator, frame, searchStart, searchStart.AddDays(7), settings.MinimumElevationDegrees);
         SatellitePass? next = upcoming.Passes.Count > 0 ? upcoming.Passes[0] : null;
 
@@ -99,7 +129,7 @@ internal static class SkyCli
         if (look.ElevationDegrees >= settings.MinimumElevationDegrees)
         {
             // The pass finder only reports passes that rise inside its window, so say so directly.
-            await o.WriteLineAsync($"  pass        in progress now, above {Format.Number(settings.MinimumElevationDegrees, 0)}°").ConfigureAwait(false);
+            await o.WriteLineAsync($"  pass        in progress now, above {Format.Degrees(settings.MinimumElevationDegrees)}°").ConfigureAwait(false);
         }
         else if (next is not null)
         {
@@ -109,7 +139,7 @@ internal static class SkyCli
         {
             await o.WriteLineAsync(Format.SearchStop(upcoming, settings.TimeZone) is { } stop
                 ? $"  next pass   none found: {stop}"
-                : $"  next pass   none above {Format.Number(settings.MinimumElevationDegrees, 0)}° in the next 7 days").ConfigureAwait(false);
+                : $"  next pass   none above {Format.Degrees(settings.MinimumElevationDegrees)}° in the next 7 days").ConfigureAwait(false);
         }
 
         return 0;
@@ -119,9 +149,9 @@ internal static class SkyCli
         CommandContext context, long catalogNumber, bool refresh, int count, int days, double? minimumElevation, CancellationToken token)
     {
         var (env, settings, _) = context;
-        if (count < 1 || days < 1 || days > 30 || minimumElevation is < 0 or >= 90)
+        if (count < 1 || days < 1 || days > 30)
         {
-            await env.Error.WriteLineAsync("--count must be at least 1, --days from 1 to 30, and --min-elevation from 0 to below 90.").ConfigureAwait(false);
+            await env.Error.WriteLineAsync("--count must be at least 1, and --days from 1 to 30.").ConfigureAwait(false);
             return 1;
         }
 
@@ -133,15 +163,17 @@ internal static class SkyCli
 
         double minimum = minimumElevation ?? settings.MinimumElevationDegrees;
         DateTimeOffset t = env.Time.GetUtcNow();
-        // Start on a whole second, so the 10 s rise and set samples print exactly.
-        DateTimeOffset searchStart = Format.CeilingToSecond(t);
+        // Start on the whole second at or before now, so the 10 s rise and set samples print exactly.
+        DateTimeOffset searchStart = Format.FloorToSecond(t);
         PassSearchResult search = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), searchStart, searchStart.AddDays(days), minimum);
         var found = search.Passes.Take(count).ToList();
         TimeZoneInfo zone = settings.TimeZone;
 
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
-        await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Number(minimum, 0)}° in the next {days} days. Times in {zone.Id} ({Format.OffsetLabel(zone, t, t.AddDays(days))}).").ConfigureAwait(false);
+        string offsetLabel = Format.OffsetLabel(zone, searchStart, searchStart.AddDays(days));
+        bool offsetChanges = offsetLabel.Contains("daylight saving", StringComparison.Ordinal);
+        await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Degrees(minimum)}° in the next {days} days. Times in {zone.Id} ({offsetLabel}{(offsetChanges ? "; each time shows its offset" : string.Empty)}).").ConfigureAwait(false);
         string peakBound = found.Count > 0
             ? $"{Format.BoundDegrees(found.Max(p => p.PeakElevationUncertaintyDegrees))}°"
             : "a per-pass bound";
@@ -150,10 +182,12 @@ internal static class SkyCli
         await o.WriteLineAsync("  Rise                 Az       Peak        El      Az       Set       Az").ConfigureAwait(false);
         foreach (SatellitePass pass in found)
         {
+            // Where daylight saving changes the offset inside the window, a wall-clock time alone can
+            // be ambiguous (the repeated hour), so each time then carries its offset.
             await o.WriteLineAsync(
-                $"  {Format.LocalTime(pass.Rise.Time, zone)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
-                $"{Format.LocalClockTenths(pass.Culmination.Time, zone)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
-                $"{Format.LocalClock(pass.Set.Time, zone)}  {Azimuth(pass.Set.AzimuthDegrees)}").ConfigureAwait(false);
+                $"  {Format.LocalTime(pass.Rise.Time, zone)}{Offset(pass.Rise.Time)}  {Azimuth(pass.Rise.AzimuthDegrees)}  " +
+                $"{Format.LocalClockTenths(pass.Culmination.Time, zone)}{Offset(pass.Culmination.Time)}  {Format.Number(pass.Culmination.ElevationDegrees, 1),5}°  {Azimuth(pass.Culmination.AzimuthDegrees)}  " +
+                $"{Format.LocalClock(pass.Set.Time, zone)}{Offset(pass.Set.Time)}  {Azimuth(pass.Set.AzimuthDegrees)}").ConfigureAwait(false);
         }
 
         if (found.Count < count)
@@ -164,6 +198,8 @@ internal static class SkyCli
         }
 
         return 0;
+
+        string Offset(DateTimeOffset instant) => offsetChanges ? Format.OffsetSuffix(instant, zone) : string.Empty;
     }
 
     private static string Azimuth(double degrees) => $"{Format.Number(degrees, 1),5}°";
@@ -172,7 +208,8 @@ internal static class SkyCli
     private static async Task<GpRecord?> FindAsync(CommandContext context, long catalogNumber, bool refresh, CancellationToken token)
     {
         var (env, settings, cache) = context;
-        bool anyData = false;
+        var loaded = new List<string>();
+        var unavailable = new List<string>();
         foreach (string group in settings.Groups)
         {
             GpCacheResult result = await cache.GetGroupAsync(group, token, refresh).ConfigureAwait(false);
@@ -181,7 +218,7 @@ internal static class SkyCli
                 await env.Error.WriteLineAsync($"warning: {warning}").ConfigureAwait(false);
             }
 
-            anyData |= result.Records.Count > 0;
+            (result.Records.Count > 0 ? loaded : unavailable).Add(group);
             GpRecord? match = result.Records.Where(r => r.Elements.CatalogNumber == catalogNumber).MaxBy(r => r.Elements.Epoch);
             if (match is not null)
             {
@@ -195,8 +232,11 @@ internal static class SkyCli
             }
         }
 
-        await env.Error.WriteLineAsync(anyData
-            ? $"NORAD {catalogNumber} is not in the configured CelesTrak groups ({string.Join(", ", settings.Groups)})."
+        string missing = unavailable.Count == 0
+            ? string.Empty
+            : $" {string.Join(", ", unavailable)} could not be loaded; see the warnings above.";
+        await env.Error.WriteLineAsync(loaded.Count > 0
+            ? $"NORAD {catalogNumber} is not in {string.Join(", ", loaded)}.{missing}"
             : "No element sets are available: nothing is cached and CelesTrak could not be used. See the warnings above.").ConfigureAwait(false);
         return null;
     }

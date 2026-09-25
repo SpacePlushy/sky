@@ -91,9 +91,11 @@ public sealed partial class CommandTests : IDisposable
     [Fact]
     public async Task Printed_times_keep_their_stated_precision_from_a_fractional_clock_time()
     {
-        // The search starts on the next whole second, so rise and set print exactly, and peaks
-        // print to tenths, keeping the 0.1 s peak bound in the output.
-        _cli.Clock.SetUtcNow(Now.AddMilliseconds(700));
+        // The search starts on the whole second at or before the clock, so rise and set print
+        // exactly, and peaks print to tenths. The clock's fraction is chosen so the first pass
+        // rises 0.2 s after a grid point: printing unrounded times would show that pass rising
+        // before the true crossing, and rounding up instead would shift every rise by a second.
+        _cli.Clock.SetUtcNow(Now.AddTicks(20_332_000)); // 04:00:02.332
 
         await _cli.RunAsync("passes");
 
@@ -104,6 +106,7 @@ public sealed partial class CommandTests : IDisposable
         {
             var riseUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
             Assert.InRange((riseUtc - pass.GetProperty("rise").GetProperty("utc").GetDateTimeOffset()).TotalSeconds, -0.001, 10.001);
+            Assert.Equal(0, (riseUtc - Now.AddSeconds(2)).Ticks % TimeSpan.FromSeconds(10).Ticks); // on the 04:00:02 grid
 
             var peakClock = TimeSpan.ParseExact(row.Groups["peak"].Value, @"hh\:mm\:ss\.f", CultureInfo.InvariantCulture);
             var peakUtc = ToUtc(DateTime.ParseExact(row.Groups["rise"].Value[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture) + peakClock);
@@ -136,6 +139,134 @@ public sealed partial class CommandTests : IDisposable
 
         Assert.Equal(0, exit);
         Assert.Contains("ISS (ZARYA) elements are 4.4 days old", _cli.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Now_reports_a_pass_that_rises_within_the_current_second()
+    {
+        // Skyfield's first pass rises at 05:32:22.132. At 05:32:22.050 the ISS is still below 10
+        // degrees, so this pass is the next one, rising on the 10 s grid from 05:32:22.
+        _cli.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 24, 5, 32, 22, TimeSpan.Zero).AddMilliseconds(50));
+
+        await _cli.RunAsync("now");
+
+        Assert.Contains("next pass   rises 2026-09-23 22:32:32", _cli.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Minimum_elevation_parses_the_same_in_every_locale()
+    {
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+
+            int exit = await _cli.RunAsync("passes", "--min-elevation", "30.5");
+
+            Assert.Equal(0, exit);
+            Assert.Contains("above 30.5°", _cli.Out.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
+    }
+
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("90")]
+    [InlineData("-1")]
+    [InlineData("1,5")]
+    public async Task Invalid_minimum_elevations_are_rejected(string value)
+    {
+        int exit = await _cli.RunAsync("passes", "--min-elevation", value);
+
+        Assert.NotEqual(0, exit);
+        Assert.Empty(_cli.Requests);
+    }
+
+    [Fact]
+    public async Task Rows_carry_utc_offsets_when_daylight_saving_changes_within_the_window()
+    {
+        // Denver falls back from UTC-6 to UTC-7 on 2026-11-01. Wall-clock times alone would be
+        // ambiguous in the repeated hour, so each printed time carries its offset.
+        _cli.WriteLocal(System.Text.Json.JsonSerializer.Serialize(new
+        {
+            Observer = new { TimeZone = "America/Denver" },
+            CelesTrak = new { Groups = "stations", CacheDirectory = _cli.CacheDirectory },
+        }));
+        _cli.Clock.SetUtcNow(new DateTimeOffset(2026, 10, 30, 12, 0, 0, TimeSpan.Zero));
+
+        int exit = await _cli.RunAsync("passes", "--days", "4", "--count", "20");
+
+        Assert.Equal(0, exit);
+        var rows = OffsetRow().Matches(_cli.Out.ToString()).ToList();
+        Assert.NotEmpty(rows);
+        Assert.Contains(rows, r => r.Groups["riseOffset"].Value == "-06:00");
+        Assert.Contains(rows, r => r.Groups["riseOffset"].Value == "-07:00");
+        foreach (var row in rows)
+        {
+            var rise = DateTimeOffset.Parse($"{row.Groups["date"].Value}T{row.Groups["rise"].Value}{row.Groups["riseOffset"].Value}", CultureInfo.InvariantCulture);
+            var set = DateTimeOffset.Parse($"{row.Groups["date"].Value}T{row.Groups["set"].Value}{row.Groups["setOffset"].Value}", CultureInfo.InvariantCulture);
+            Assert.True(set > rise, $"Row {row.Value.Trim()}: set is not after rise.");
+        }
+    }
+
+    [Fact]
+    public async Task Refresh_still_respects_the_2_hour_rule()
+    {
+        await _cli.RunAsync("passes");
+        _cli.Clock.Advance(TimeSpan.FromHours(1));
+
+        await _cli.RunAsync("passes", "--refresh");
+        Assert.Single(_cli.Requests);
+        Assert.Contains("2 hours", _cli.Error.ToString(), StringComparison.Ordinal);
+
+        _cli.Clock.Advance(TimeSpan.FromHours(1));
+        await _cli.RunAsync("passes", "--refresh");
+        Assert.Equal(2, _cli.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Unblock_lets_a_blocked_group_be_requested_again()
+    {
+        await _cli.RunAsync("passes");
+        _cli.NextAnswer = (System.Net.HttpStatusCode.Forbidden, "Forbidden for test");
+        _cli.Clock.Advance(TimeSpan.FromHours(7));
+        await _cli.RunAsync("passes");
+        _cli.Clock.Advance(TimeSpan.FromHours(7));
+        await _cli.RunAsync("passes");
+        Assert.Equal(2, _cli.Requests.Count); // blocked: no third request
+
+        int exit = await _cli.RunAsync("unblock", "stations");
+        await _cli.RunAsync("passes");
+
+        Assert.Equal(0, exit);
+        Assert.Equal(3, _cli.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Unblock_with_an_invalid_group_name_fails_cleanly()
+    {
+        int exit = await _cli.RunAsync("unblock", "../secrets");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("../secrets", _cli.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("   at ", _cli.Error.ToString(), StringComparison.Ordinal); // no stack trace
+    }
+
+    [Fact]
+    public async Task Lookup_failure_names_groups_that_could_not_be_loaded()
+    {
+        _cli.WriteLocal(System.Text.Json.JsonSerializer.Serialize(new { CelesTrak = new { Groups = "stations,visual", CacheDirectory = _cli.CacheDirectory } }));
+        _cli.UnreachableGroups.Add("visual");
+
+        int exit = await _cli.RunAsync("passes", "--sat", "99999");
+
+        Assert.Equal(1, exit);
+        Assert.Contains("NORAD 99999 is not in stations", _cli.Error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("visual could not be loaded", _cli.Error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -194,4 +325,7 @@ public sealed partial class CommandTests : IDisposable
 
     [GeneratedRegex(@"^\s*(?<rise>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\S+\s+(?<peak>\d{2}:\d{2}:\d{2}\.\d)\s", RegexOptions.Multiline)]
     private static partial Regex PassRow();
+
+    [GeneratedRegex(@"^\s*(?<date>\d{4}-\d{2}-\d{2}) (?<rise>\d{2}:\d{2}:\d{2})(?<riseOffset>[+-]\d{2}:\d{2})\s+\S+\s+\S+\s+\S+\s+\S+\s+(?<set>\d{2}:\d{2}:\d{2})(?<setOffset>[+-]\d{2}:\d{2})", RegexOptions.Multiline)]
+    private static partial Regex OffsetRow();
 }

@@ -33,6 +33,12 @@ internal sealed class CliHarness : IDisposable
 
     public bool CelesTrakReachable { get; set; } = true;
 
+    /// <summary>Groups for which the fake CelesTrak cannot be reached.</summary>
+    public HashSet<string> UnreachableGroups { get; } = [];
+
+    /// <summary>When set, the next request is answered with this status and body, once.</summary>
+    public (System.Net.HttpStatusCode Status, string Body)? NextAnswer { get; set; }
+
     public StringWriter Out { get; } = new();
 
     public StringWriter Error { get; } = new();
@@ -64,9 +70,16 @@ internal sealed class CliHarness : IDisposable
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             harness.Requests.Add(request.RequestUri!);
-            if (!harness.CelesTrakReachable)
+            string query = request.RequestUri!.Query;
+            if (!harness.CelesTrakReachable || harness.UnreachableGroups.Any(g => query.Contains($"GROUP={g}&", StringComparison.Ordinal)))
             {
                 throw new HttpRequestException("Simulated network failure.");
+            }
+
+            if (harness.NextAnswer is { } answer)
+            {
+                harness.NextAnswer = null;
+                return Task.FromResult(new HttpResponseMessage(answer.Status) { Content = new StringContent(answer.Body) });
             }
 
             string body = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "stations-2026-09-24.json"));
