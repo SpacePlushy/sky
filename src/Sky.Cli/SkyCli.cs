@@ -142,7 +142,10 @@ internal static class SkyCli
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
         await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Number(minimum, 0)}° in the next {days} days. Times in {zone.Id} ({Format.OffsetLabel(zone, t, t.AddDays(days))}).").ConfigureAwait(false);
-        await o.WriteLineAsync($"Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and {Format.BoundDegrees(CoarsePassFinder.PeakElevationBoundDegrees(record.Elements))}°. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
+        string peakBound = found.Count > 0
+            ? $"{Format.BoundDegrees(found.Max(p => p.PeakElevationUncertaintyDegrees))}°"
+            : "a per-pass bound";
+        await o.WriteLineAsync($"Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and {peakBound}. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
         await o.WriteLineAsync().ConfigureAwait(false);
         await o.WriteLineAsync("  Rise                 Az       Peak        El      Az       Set       Az").ConfigureAwait(false);
         foreach (SatellitePass pass in found)

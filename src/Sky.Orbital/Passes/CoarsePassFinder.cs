@@ -1,4 +1,3 @@
-using Sky.Orbital.Elements;
 using Sky.Orbital.Frames;
 using Sky.Orbital.Propagation;
 
@@ -10,22 +9,33 @@ namespace Sky.Orbital.Passes;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Rise is the first 10 s sample at or above the minimum elevation, so it is up to one step after
-/// the true crossing; set is the last such sample, up to one step before it.
+/// <b>Rise and set.</b> Rise is the first 10 s sample at or above the minimum elevation, so it is up
+/// to one step after the true crossing; set is the last such sample, up to one step before. If the
+/// refined peak falls outside those samples (a grazing pass), rise or set is moved to the peak,
+/// which keeps rise ≤ peak ≤ set and keeps both bounds, since the true crossing lies between the
+/// previous sample and the peak.
 /// </para>
 /// <para>
-/// The peak is refined because elevation near the zenith changes about 1 degree per second, so a
-/// 10 s grid alone could miss an overhead peak by up to 5 degrees. Elevation during a pass has a
-/// single maximum, which lies within one coarse step of the highest coarse sample. Searching that
-/// 20 s span in 0.1 s steps puts the reported peak within 0.1 s of the true one, and below it by
-/// at most <see cref="PeakElevationBoundDegrees"/>, which depends on how low the orbit is: 0.061
-/// degrees for the ISS.
+/// <b>Peak.</b> Every local maximum among the 10 s samples of a pass is searched in 0.1 s steps
+/// across one coarse step either side, and the highest result is the culmination. Elevation has no
+/// two maxima within 20 s of each other for any orbit, so each true maximum lies inside one of those
+/// searches, and the reported peak is within 0.1 s of the highest one. A pass can have several
+/// maxima; high, eccentric orbits often do. The shortfall is at most the line of sight's angular rate
+/// times 0.05 s. <see cref="SatellitePass.PeakElevationUncertaintyDegrees"/> bounds that rate at the
+/// reported peak by the satellite's speed relative to the observer over the range, allowing for the
+/// most either can change in 0.1 s. It comes from the pass itself, so it holds for any orbit and any
+/// element age: about 0.05 degrees for an overhead ISS pass, 0.02 for a 15 degree pass.
 /// </para>
 /// <para>
-/// Only complete passes are reported: a pass already above the minimum at the start, or still
-/// above it at the end, is left out. If SGP4 fails, for example because the satellite has decayed,
-/// the search stops and the result says when and why. Elevation is geometric, with no refraction,
-/// and UTC is treated as UT1 (assumption A5).
+/// <b>Grazing passes.</b> A pass can clear the minimum between two samples without any sample doing
+/// so. Every local maximum below the minimum that could rise above it is refined too. Between samples
+/// elevation can gain at most the line-of-sight rate, bounded as above over 10 s, times 10 s.
+/// </para>
+/// <para>
+/// Only complete passes are reported: a pass already above the minimum at the start, or still above
+/// it at the end, is left out. If SGP4 fails, for example because the satellite has decayed, sampling
+/// stops there and the result says when and why. Elevation is geometric, with no refraction, and UTC
+/// is treated as UT1 (assumption A5).
 /// </para>
 /// </remarks>
 public static class CoarsePassFinder
@@ -36,40 +46,9 @@ public static class CoarsePassFinder
     /// <summary>The step used to refine each peak.</summary>
     public static readonly TimeSpan PeakStep = TimeSpan.FromSeconds(0.1);
 
-    /// <summary>
-    /// The most a reported peak elevation can fall short of the true peak for this satellite, in
-    /// degrees, for any observer allowed by the settings (up to 9 km above the ellipsoid).
-    /// </summary>
-    /// <remarks>
-    /// The reported peak is the highest 0.1 s sample, so it is within 0.05 s of the nearer sample
-    /// bracketing the true peak, and falls short by at most the fastest the line of sight can turn,
-    /// times 0.05 s. That rate is at most the satellite's speed relative to the Earth divided by
-    /// the shortest possible range:
-    /// <list type="bullet">
-    /// <item>Radii come from the mean elements (a from mean motion, WGS-72 mu), widened by 25 km
-    /// each way to cover SGP4's short-period swings, the mean-motion convention, and a week of drag.</item>
-    /// <item>Speed is vis-viva at the lowest radius, plus Earth rotation at the highest.</item>
-    /// <item>Range is the lowest radius minus the largest observer radius, 6378.137 km + 9 km.</item>
-    /// </list>
-    /// For the ISS this gives 0.062 degrees; an exactly overhead pass measures 0.0495.
-    /// </remarks>
-    public static double PeakElevationBoundDegrees(MeanElements elements)
-    {
-        ArgumentNullException.ThrowIfNull(elements);
-        const double mu = 398600.8;                   // km^3/s^2, WGS-72 as SGP4 uses
-        const double earthRotation = 7.292115855e-5;  // rad/s, GMST rate
-        const double marginKm = 25.0;
-        const double largestObserverRadiusKm = 6378.137 + 9.0;
-
-        double n = elements.MeanMotion * 2.0 * Math.PI / 86400.0;
-        double a = Math.Cbrt(mu / (n * n));
-        double lowest = (a * (1.0 - elements.Eccentricity)) - marginKm;
-        double highest = (a * (1.0 + elements.Eccentricity)) + marginKm;
-        double speed = Math.Sqrt(mu * ((2.0 / lowest) - (1.0 / a))) + (earthRotation * highest);
-        double nearest = Math.Max(lowest - largestObserverRadiusKm, 1.0);
-        double halfStep = PeakStep.TotalSeconds / 2.0;
-        return speed / nearest * halfStep * 180.0 / Math.PI;
-    }
+    // Upper bound on how much the relative speed can change in 10 s, km/s. Gravity changes a low
+    // orbit's speed by under 0.01 km/s per second; 0.1 km/s over 10 s is ample.
+    private const double SpeedAllowanceKmPerSecond = 0.1;
 
     /// <summary>Finds complete passes between two instants.</summary>
     /// <param name="propagator">The satellite.</param>
@@ -87,76 +66,148 @@ public static class CoarsePassFinder
         ArgumentNullException.ThrowIfNull(propagator);
         ArgumentNullException.ThrowIfNull(observer);
 
-        var passes = new List<SatellitePass>();
-        bool? previousAbove = null;
-        PassEvent? rise = null;
-        PassEvent peak = default;
-        PassEvent lastAbove = default;
-
+        var samples = new List<Sample>();
+        Sgp4Error stoppedBy = Sgp4Error.None;
+        DateTimeOffset? stoppedAt = null;
         for (DateTimeOffset t = start; t <= end; t += Step)
         {
-            PropagationResult result = propagator.Propagate(t);
-            if (!result.Succeeded)
+            Sample? sample = Observe(propagator, observer, t);
+            if (sample is null)
             {
-                return new PassSearchResult(passes, result.Error, t);
+                stoppedBy = propagator.Propagate(t).Error;
+                stoppedAt = t;
+                break;
             }
 
-            PassEvent sample = Observe(observer, result.State, t);
-            bool above = sample.ElevationDegrees >= minimumElevationDegrees;
-
-            if (above)
-            {
-                if (previousAbove == false)
-                {
-                    rise = sample;
-                    peak = sample;
-                }
-                else if (rise is not null && sample.ElevationDegrees > peak.ElevationDegrees)
-                {
-                    peak = sample;
-                }
-
-                lastAbove = sample;
-            }
-            else if (rise is { } risen)
-            {
-                passes.Add(new SatellitePass(risen, RefinePeak(propagator, observer, peak), lastAbove));
-                rise = null;
-            }
-
-            previousAbove = above;
+            samples.Add(sample.Value);
         }
 
-        return new PassSearchResult(passes, Sgp4Error.None, null);
+        var passes = new List<SatellitePass>();
+        int i = 0;
+        while (i < samples.Count)
+        {
+            if (samples[i].Event.ElevationDegrees >= minimumElevationDegrees)
+            {
+                int first = i;
+                while (i < samples.Count && samples[i].Event.ElevationDegrees >= minimumElevationDegrees)
+                {
+                    i++;
+                }
+
+                int last = i - 1;
+                if (first == 0 || i == samples.Count)
+                {
+                    continue; // already up at the start, or still up at the end: not a complete pass
+                }
+
+                Sample peak = HighestRefinedPeak(propagator, observer, samples, first - 1, last + 1);
+                PassEvent rise = samples[first].Event;
+                PassEvent set = samples[last].Event;
+                if (peak.Event.Time < rise.Time)
+                {
+                    rise = peak.Event;
+                }
+
+                if (peak.Event.Time > set.Time)
+                {
+                    set = peak.Event;
+                }
+
+                passes.Add(new SatellitePass(rise, peak.Event, set, PeakUncertaintyDegrees(peak)));
+            }
+            else
+            {
+                if (i > 0 && i < samples.Count - 1 && IsLocalMaximum(samples, i)
+                    && samples[i].Event.ElevationDegrees + MaximumGainDegrees(samples[i], Step) >= minimumElevationDegrees)
+                {
+                    Sample peak = Refine(propagator, observer, samples[i]);
+                    if (peak.Event.ElevationDegrees >= minimumElevationDegrees)
+                    {
+                        passes.Add(new SatellitePass(peak.Event, peak.Event, peak.Event, PeakUncertaintyDegrees(peak)));
+                    }
+                }
+
+                i++;
+            }
+        }
+
+        return new PassSearchResult(passes, stoppedBy, stoppedAt);
     }
 
-    /// <summary>Searches one coarse step either side of the highest coarse sample in 0.1 s steps.</summary>
-    private static PassEvent RefinePeak(Sgp4Propagator propagator, TopocentricFrame observer, PassEvent coarsePeak)
+    /// <summary>Refines every local maximum between two sample indices and returns the highest result.</summary>
+    private static Sample HighestRefinedPeak(
+        Sgp4Propagator propagator, TopocentricFrame observer, List<Sample> samples, int before, int after)
     {
-        PassEvent best = coarsePeak;
-        long steps = Step.Ticks / PeakStep.Ticks;
-        for (long i = -steps; i <= steps; i++)
+        Sample? best = null;
+        for (int k = before + 1; k < after; k++)
         {
-            DateTimeOffset t = coarsePeak.Time + (PeakStep * i);
-            PropagationResult result = propagator.Propagate(t);
-            if (!result.Succeeded)
+            if (IsLocalMaximum(samples, k))
             {
-                continue;
+                Sample refined = Refine(propagator, observer, samples[k]);
+                if (best is null || refined.Event.ElevationDegrees > best.Value.Event.ElevationDegrees)
+                {
+                    best = refined;
+                }
             }
+        }
 
-            PassEvent sample = Observe(observer, result.State, t);
-            if (sample.ElevationDegrees > best.ElevationDegrees)
+        // A run of samples at or above the minimum always contains a local maximum.
+        return best ?? throw new InvalidOperationException("No local maximum in a pass.");
+    }
+
+    private static bool IsLocalMaximum(List<Sample> samples, int k) =>
+        samples[k].Event.ElevationDegrees >= samples[k - 1].Event.ElevationDegrees
+        && samples[k].Event.ElevationDegrees >= samples[k + 1].Event.ElevationDegrees;
+
+    /// <summary>Searches one coarse step either side of a sample in 0.1 s steps.</summary>
+    private static Sample Refine(Sgp4Propagator propagator, TopocentricFrame observer, Sample coarse)
+    {
+        Sample best = coarse;
+        long steps = Step.Ticks / PeakStep.Ticks;
+        for (long k = -steps; k <= steps; k++)
+        {
+            Sample? sample = Observe(propagator, observer, coarse.Event.Time + (PeakStep * k));
+            if (sample is { } candidate && candidate.Event.ElevationDegrees > best.Event.ElevationDegrees)
             {
-                best = sample;
+                best = candidate;
             }
         }
 
         return best;
     }
 
-    private static PassEvent Observe(TopocentricFrame observer, TemeState state, DateTimeOffset t)
+    /// <summary>
+    /// The most elevation can exceed the reported peak: the line-of-sight rate, bounded over the
+    /// 0.1 s either side where the true peak can lie, times the 0.05 s to the nearer sample.
+    /// </summary>
+    private static double PeakUncertaintyDegrees(Sample peak) =>
+        MaximumGainDegrees(peak, PeakStep) / 2.0;
+
+    /// <summary>
+    /// The most elevation can change within <paramref name="span"/> of a sample, in degrees: the
+    /// relative speed (plus an allowance for its change) over the shortest range it can reach.
+    /// </summary>
+    private static double MaximumGainDegrees(Sample sample, TimeSpan span)
     {
-        LookAngles look = observer.LookAt(EarthRotation.TemeToEcef(state, t));
-        return new PassEvent(t, look.AzimuthDegrees, look.ElevationDegrees);
+        double seconds = span.TotalSeconds;
+        double speed = sample.SpeedKmPerSecond + (SpeedAllowanceKmPerSecond * seconds / Step.TotalSeconds);
+        double nearest = Math.Max(sample.RangeKm - (speed * seconds), 1.0);
+        return speed / nearest * seconds * 180.0 / Math.PI;
     }
+
+    private static Sample? Observe(Sgp4Propagator propagator, TopocentricFrame observer, DateTimeOffset t)
+    {
+        PropagationResult result = propagator.Propagate(t);
+        if (!result.Succeeded)
+        {
+            return null;
+        }
+
+        EcefState ecef = EarthRotation.TemeToEcef(result.State, t);
+        LookAngles look = observer.LookAt(ecef);
+        return new Sample(new PassEvent(t, look.AzimuthDegrees, look.ElevationDegrees), look.RangeKm, ecef.Velocity.Length);
+    }
+
+    /// <summary>One observation: where the satellite appears, its range, and its speed relative to the Earth.</summary>
+    private readonly record struct Sample(PassEvent Event, double RangeKm, double SpeedKmPerSecond);
 }

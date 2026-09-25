@@ -29,7 +29,7 @@ public class CoarsePassFinderTests
             Assert.True(pass.Culmination.ElevationDegrees >= pass.Set.ElevationDegrees);
             Assert.True(pass.Set.ElevationDegrees >= 10.0);
             Assert.True(ElevationAt(pass.Set.Time + CoarsePassFinder.Step) < 10.0);
-            Assert.True(pass.Rise.Time < pass.Culmination.Time || pass.Rise == pass.Culmination);
+            Assert.True(pass.Rise.Time <= pass.Culmination.Time);
             Assert.True(pass.Culmination.Time <= pass.Set.Time);
         }
     }
@@ -85,51 +85,101 @@ public class CoarsePassFinderTests
     }
 
     [Theory]
-    [InlineData(0.05)]
-    [InlineData(3.05)]
-    [InlineData(5.05)]
-    [InlineData(7.05)]
-    public void An_overhead_pass_peaks_at_90_degrees_at_the_moment_the_satellite_is_overhead(double secondsOffGrid)
+    // Phases .05 and .15 put t0 midway between 0.1 s peak samples: the worst case for the refinement.
+    // Phases .10 and .20 put t0 on a 0.1 s sample but midway on a 0.2 s grid, so a coarser peak
+    // step fails here even though the stated bound has margin.
+    [InlineData(0.05, true)]
+    [InlineData(3.15, true)]
+    [InlineData(7.05, true)]
+    [InlineData(0.10, false)]
+    [InlineData(3.20, false)]
+    [InlineData(5.00, false)]
+    public void An_overhead_pass_peaks_at_90_degrees_at_the_moment_the_satellite_is_overhead(double secondsOffGrid, bool midway)
     {
         // Exact geometry: an observer at the ISS's subpoint at time t0, at zero height, has the ISS on
         // its local vertical at t0, so the true peak is 90 degrees at t0. Elevation changes about 1
-        // degree per second near the zenith, the worst case for sampling. Each offset puts t0 halfway
-        // between 0.1 s peak samples (and between 10 s samples), so this exercises the worst case.
+        // degree per second near the zenith, the worst case for sampling.
         var t0 = WindowStart.AddHours(5);
         var ecef = EarthRotation.TemeToEcef(Iss.Propagate(t0).State, t0);
         var subpoint = Wgs84.FromEcef(ecef.Position);
         var observer = new TopocentricFrame(subpoint with { HeightKm = 0 });
         var start = t0.AddTicks(-(long)Math.Round((1800 + secondsOffGrid) * TimeSpan.TicksPerSecond));
 
-        var passes = CoarsePassFinder.Find(Iss, observer, start, start.AddHours(1), 10.0).Passes;
+        var pass = Assert.Single(CoarsePassFinder.Find(Iss, observer, start, start.AddHours(1), 10.0).Passes);
 
-        var pass = Assert.Single(passes);
         double shortfall = 90.0 - pass.Culmination.ElevationDegrees;
-        Assert.InRange((pass.Culmination.Time - t0).TotalSeconds, -0.1, 0.1);
-        Assert.InRange(shortfall, 0.0, CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements));
-        // The test itself: the peak really fell between samples, so the bound was exercised.
-        Assert.True(shortfall > 0.02, $"Shortfall {shortfall} degrees: the worst case was not exercised.");
+        if (midway)
+        {
+            // The reported peak is 0.05 s from t0, and the stated uncertainty must cover the shortfall.
+            // Near the zenith elevation falls linearly, so the shortfall is the line-of-sight rate times
+            // 0.05 s, and the bound (the same rate with its worst change over 0.1 s) is within 1% of it.
+            Assert.Equal(0.05, Math.Abs((pass.Culmination.Time - t0).TotalSeconds), 1e-6);
+            Assert.InRange(shortfall, 0.02, pass.PeakElevationUncertaintyDegrees);
+            Assert.True(pass.PeakElevationUncertaintyDegrees <= 1.01 * shortfall, $"Bound {pass.PeakElevationUncertaintyDegrees} is loose against {shortfall}.");
+        }
+        else
+        {
+            // t0 is on a 0.1 s sample, so the peak is found exactly.
+            Assert.Equal(0.0, (pass.Culmination.Time - t0).TotalSeconds, 1e-6);
+            Assert.True(shortfall < 1e-6, $"Shortfall {shortfall} degrees at an on-grid peak.");
+        }
     }
 
     [Fact]
-    public void Peak_elevation_bound_for_the_iss_matches_the_hand_derivation()
+    public void Grazing_passes_are_found_and_keep_rise_peak_set_in_order()
     {
-        // From the ISS elements: n = 15.49258637 rev/day, e = 0.00047, mu = 398600.8 km^3/s^2.
-        // a = (mu / n^2)^(1/3) = 6795.4 km; perigee 6792.2 km, apogee 6798.6 km; lowest radius with
-        // the 25 km margin 6767.2 km. Vis-viva there: 7.691 km/s. Plus Earth rotation at apogee
-        // plus margin, 7.2921e-5 * 6823.6 = 0.4976 km/s: 8.189 km/s. Nearest possible observer:
-        // 6767.2 - (6378.137 + 9) = 380.1 km. Line of sight turns at most 0.021545 rad/s; over half
-        // a 0.1 s peak step that is 1.0773e-3 rad = 0.0617 degrees.
-        Assert.Equal(0.0617, CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements), 5e-4);
+        // Set the minimum just below each ISS pass's true peak (0.02 to 0.2 degrees). Often no 10 s
+        // sample clears it, or only one does and the true peak lies before or after it. Every pass must
+        // still be found, with rise at or before the peak and set at or after it.
+        var reference = SkyfieldReference.Instance.Passes;
+        foreach (var (expected, index) in reference.Select((p, i) => (p, i)))
+        {
+            foreach (double margin in new[] { 0.02, 0.05, 0.2 })
+            {
+                double minimum = expected.Culmination.ElevationDeg - margin;
+                var match = CoarsePassFinder.Find(Iss, Phoenix, WindowStart, WindowStart.AddDays(7), minimum).Passes
+                    .Where(p => Math.Abs((p.Culmination.Time - expected.Culmination.Utc).TotalSeconds) < 60)
+                    .ToList();
+
+                var pass = Assert.Single(match);
+                Assert.True(pass.Rise.Time <= pass.Culmination.Time, $"Pass {index}, margin {margin}: rise after peak.");
+                Assert.True(pass.Culmination.Time <= pass.Set.Time, $"Pass {index}, margin {margin}: set before peak.");
+                Assert.True(pass.Culmination.ElevationDegrees >= minimum, $"Pass {index}, margin {margin}: peak below minimum.");
+                Assert.InRange((pass.Culmination.Time - expected.Culmination.Utc).TotalSeconds, -0.101, 0.101);
+            }
+        }
     }
 
     [Fact]
-    public void Peak_elevation_bound_grows_as_the_orbit_gets_lower()
+    public void A_pass_with_two_elevation_maxima_reports_the_higher_one()
     {
-        var lower = Reference.MeanElements with { MeanMotion = 16.0 }; // about 270 km perigee
+        // Vallado's Molniya case (12 h, e = 0.69) seen from 45 N, 100 W: a 10.9 hour pass with maxima
+        // of about 79.4 and 85.1 degrees, 7.7 hours apart. The reference is a brute-force 0.1 s sweep
+        // of the whole pass, which cannot miss a maximum.
+        var molniya = Tle.Parse(
+            "1 08195U 75081A   06176.33215444  .00000099  00000-0  11873-3 0   813",
+            "2 08195  64.1586 279.0717 6877146 264.7651  20.2257  2.00491383225656");
+        var propagator = Sgp4Propagator.Create(molniya);
+        var observer = new TopocentricFrame(new Geodetic(45.0, -100.0, 0.0));
+        var start = new DateTimeOffset(2006, 6, 26, 7, 0, 0, TimeSpan.Zero);
 
-        Assert.True(
-            CoarsePassFinder.PeakElevationBoundDegrees(lower) > CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements));
+        var pass = Assert.Single(CoarsePassFinder.Find(propagator, observer, start, start.AddHours(13), 10.0).Passes);
+
+        DateTimeOffset bestTime = pass.Rise.Time;
+        double best = double.MinValue;
+        for (var t = pass.Rise.Time.AddSeconds(-10); t <= pass.Set.Time.AddSeconds(10); t = t.AddTicks(1_000_000))
+        {
+            double elevation = observer.LookAt(EarthRotation.TemeToEcef(propagator.Propagate(t).State, t)).ElevationDegrees;
+            if (elevation > best)
+            {
+                best = elevation;
+                bestTime = t;
+            }
+        }
+
+        Assert.True(best > 85.0, $"Brute force found {best} degrees; the test pass is not the expected one.");
+        Assert.InRange(best - pass.Culmination.ElevationDegrees, -1e-9, pass.PeakElevationUncertaintyDegrees);
+        Assert.InRange((pass.Culmination.Time - bestTime).TotalSeconds, -0.101, 0.101);
     }
 
     private static double ElevationAt(DateTimeOffset t) =>

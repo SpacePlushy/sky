@@ -78,12 +78,14 @@ public sealed partial class CommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Passes_states_the_finders_bounds_for_the_chosen_satellite()
+    public async Task Passes_states_the_largest_peak_uncertainty_among_the_listed_passes()
     {
         await _cli.RunAsync("passes");
 
-        // 0.0617 degrees for the ISS (see CoarsePassFinderTests), rounded up to 0.062.
-        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.062°", _cli.Out.ToString(), StringComparison.Ordinal);
+        // The five listed passes carry uncertainties from 0.0178 to 0.0456 degrees; the largest,
+        // from the 65.2 degree pass, prints rounded up to three decimals. CoarsePassFinderTests
+        // verifies the uncertainty itself against exact geometry.
+        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.046°", _cli.Out.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

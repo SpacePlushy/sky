@@ -11,7 +11,7 @@ namespace Sky.Orbital.Tests.CrossCheck;
 /// peaks to about 10 microseconds), so the bounds below are exact consequences of the finder's
 /// design, with 1 ms of slack for rounding: rise is the first 10 s sample at or above 10 degrees,
 /// so 0 to 10 s late; set is the last, so 0 to 10 s early; the peak is refined in 0.1 s steps, so
-/// it is within 0.1 s of the true peak and low by at most the ISS's PeakElevationBoundDegrees.
+/// it is within 0.1 s of the true peak and low by at most the pass's stated uncertainty.
 /// </summary>
 public class PassCrossCheckTests
 {
@@ -21,7 +21,6 @@ public class PassCrossCheckTests
     private static readonly TimeSpan Slack = TimeSpan.FromMilliseconds(1);
 
     private static readonly TimeSpan PeakTimeBound = TimeSpan.FromSeconds(0.1);
-    private static readonly double PeakElevationShortfallDegrees = CoarsePassFinder.PeakElevationBoundDegrees(Reference.MeanElements);
 
     [Theory]
     [InlineData(10.0, 25)]
@@ -51,7 +50,7 @@ public class PassCrossCheckTests
             Assert.InRange(sky.Culmination.Time - reference.Culmination.Utc, -(PeakTimeBound + Slack), PeakTimeBound + Slack);
             Assert.InRange(
                 sky.Culmination.ElevationDegrees,
-                reference.Culmination.ElevationDeg - PeakElevationShortfallDegrees,
+                reference.Culmination.ElevationDeg - sky.PeakElevationUncertaintyDegrees,
                 reference.Culmination.ElevationDeg + 1e-6);
         }
     }
