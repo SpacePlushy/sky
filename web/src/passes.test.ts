@@ -84,9 +84,20 @@ describe("visible part text", () => {
         // 19:20:16.6 rounds to 19:20:17; 19:23:02.4 rounds to 19:23:02.
         const start = base + 20 * minute + 16_600;
         const end = base + 23 * minute + 2_400;
-        expect(describeVisiblePart(part(start, end, "entersShadow"), phoenix)).toBe("19:20:17–19:23:02, up to 14.5°, then into shadow");
-        expect(describeVisiblePart(part(start, end, "set"), phoenix)).toBe("19:20:17–19:23:02, up to 14.5°");
-        expect(describeVisiblePart(part(start, end, "skyBrightens"), phoenix)).toBe("19:20:17–19:23:02, up to 14.5°, then the sky brightens");
+        expect(describeVisiblePart(part(start, end, "entersShadow"), (ms) => phoenix.clock(ms))).toBe("19:20:17–19:23:02, up to 14.5°, then into shadow");
+        expect(describeVisiblePart(part(start, end, "set"), (ms) => phoenix.clock(ms))).toBe("19:20:17–19:23:02, up to 14.5°");
+        expect(describeVisiblePart(part(start, end, "skyBrightens"), (ms) => phoenix.clock(ms))).toBe("19:20:17–19:23:02, up to 14.5°, then the sky brightens");
+    });
+
+    it("gives each time the offset of its own rounded instant across a daylight saving change", () => {
+        // Denver falls back at 2026-11-01 08:00 UTC (02:00 MDT becomes 01:00 MST). A part starting
+        // at 07:59:59.6 UTC rounds to 08:00:00, which is 01:00:00 MST: its offset must be UTC-7, the
+        // rounded instant's, not UTC-6, the raw one's.
+        const denver = new ZoneFormat("America/Denver");
+        const format = (ms: number): string => `${denver.clock(ms)} ${denver.offsetLabel(ms)}`;
+        const start = Date.parse("2026-11-01T07:59:59.600Z");
+        const end = Date.parse("2026-11-01T08:03:00.200Z");
+        expect(describeVisiblePart(part(start, end, "set"), format)).toBe("01:00:00 UTC-7–01:03:00 UTC-7, up to 14.5°");
     });
 
     it("explains a pass with no visible part from its path", () => {

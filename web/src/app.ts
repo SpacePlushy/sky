@@ -407,7 +407,12 @@ export class App {
         if (this.zoneProblem !== null) {
             banners.push({ kind: "warning", title: "Time zone", detail: this.zoneProblem });
         }
-        const warnings = new Set([...(this.now?.warnings ?? []), ...(this.track?.warnings ?? []), ...(this.passes?.warnings ?? [])]);
+        // Every endpoint repeats the element-set and cache warnings, each with figures from its own
+        // moment, so the same warning would show two or three times with different numbers. /now's are
+        // the freshest; from the track, only what /now cannot say (where SGP4 stopped the track).
+        const shared = this.now !== null ? this.now.warnings : (this.passes?.warnings ?? []);
+        const trackOnly = (this.track?.warnings ?? []).filter((w) => w.includes("the track stops there"));
+        const warnings = new Set([...shared, ...trackOnly]);
         for (const warning of warnings) {
             banners.push({ kind: "warning", title: "Warning", detail: warning });
         }

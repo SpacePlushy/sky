@@ -3,7 +3,7 @@
 
 import type { Pass, SkyPoint, VisiblePart } from "./model";
 import { fixed } from "./format";
-import { roundToSecond, type ZoneFormat } from "./time";
+import { roundToSecond } from "./time";
 
 export type PassStatus = "ended" | "inProgress" | "upcoming";
 
@@ -26,8 +26,9 @@ export function defaultPass(passes: readonly Pass[], nowMs: number): Pass | unde
 
 /**
  * How far a chosen pass's rise may move and still be the same pass. A refetch with the same
- * elements gives the same rise to the millisecond; new elements move it by seconds. Passes of one
- * satellite over one observer rise at least an orbit apart, far more than this.
+ * elements can move a rise by a millisecond (the root-finding tolerance, from a different search
+ * start); new elements move it by seconds. Passes of one satellite over one observer rise at least
+ * an orbit apart, far more than this.
  */
 export const sameRiseToleranceMs = 120_000;
 
@@ -60,13 +61,15 @@ const endings: Readonly<Record<string, string>> = {
 };
 
 /**
- * One visible part as a phrase, times to the nearest second in the observer's zone:
- * "19:20:17–19:23:02, up to 14.5°, then into shadow". It ends as the CLI's does: nothing when the
+ * One visible part as a phrase: "19:20:17–19:23:02, up to 14.5°, then into shadow". Each time is
+ * rounded to the second once and handed to `format`, which prints it as the rest of the row does
+ * (with its UTC offset near a daylight saving change, and its day when that differs), so a clock
+ * and its offset always come from the same instant. It ends as the CLI's does: nothing when the
  * satellite sets, and the reason when it vanishes earlier.
  */
-export function describeVisiblePart(part: VisiblePart, zone: ZoneFormat): string {
-    const start = zone.clock(roundToSecond(part.start.t));
-    const end = zone.clock(roundToSecond(part.end.t));
+export function describeVisiblePart(part: VisiblePart, format: (ms: number) => string): string {
+    const start = format(roundToSecond(part.start.t));
+    const end = format(roundToSecond(part.end.t));
     return `${start}–${end}, up to ${fixed(part.highest.elevationDeg, 1)}°${endings[part.endsBecause] ?? ""}`;
 }
 

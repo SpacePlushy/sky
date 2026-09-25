@@ -83,10 +83,12 @@ export class Telemetry {
         this.set("sun", `${fixed(sun.elevationDeg, 1)}°`, sun.elevationDeg < twilightSunElevationDeg ? "dark enough" : "too bright");
         // An epoch after "now" happens with a simulated clock set before the data was recorded.
         const age = now.satellite.ageDays;
+        // Rounded once, so the clock and its offset name the same instant near a DST change.
+        const epoch = roundToSecond(now.satellite.epoch);
         this.set(
             "elements",
             age >= 0 ? `${fixed(age, 2)} days old` : `${fixed(-age, 2)} days ahead of the clock`,
-            `epoch ${zone.dateTime(roundToSecond(now.satellite.epoch))} ${zone.offsetLabel(now.satellite.epoch)}`,
+            `epoch ${zone.dateTime(epoch)} ${zone.offsetLabel(epoch)}`,
         );
     }
 

@@ -5,7 +5,7 @@
 import { h } from "./dom";
 import { azimuthLabel, fixed } from "./format";
 import type { Pass, Passes } from "./model";
-import { describeVisiblePart, notVisibleReason, passStatus } from "./passes";
+import { describeVisiblePart, findByRise, notVisibleReason, passStatus } from "./passes";
 import { formatDuration, roundToSecond, type ZoneFormat } from "./time";
 
 export interface PassListView {
@@ -92,9 +92,13 @@ export class PassList {
         }
         this.container.replaceChildren(header, list);
 
+        // A refresh can move a rise by a millisecond, so focus follows the same pass by the same
+        // tolerance the selection uses, not by an exact match.
         if (focused !== undefined) {
-            const again = this.container.querySelector<HTMLButtonElement>(`button[data-rise="${focused}"]`);
-            again?.focus();
+            const target = findByRise(listed, Number(focused));
+            if (target !== undefined) {
+                this.container.querySelector<HTMLButtonElement>(`button[data-rise="${target.rise.t}"]`)?.focus();
+            }
         }
     }
 
@@ -150,7 +154,7 @@ export class PassList {
         }
 
         const visibleText = isVisible
-            ? pass.visible.map((part) => describeVisiblePart(part, zone)).join("; ")
+            ? pass.visible.map((part) => describeVisiblePart(part, time)).join("; ")
             : `Not visible (${notVisibleReason(pass.path)})`;
 
         const button = h(
@@ -165,7 +169,7 @@ export class PassList {
             h("span", { class: "cell cell-rise" }, label("Rise"), h("span", { class: "time" }, time(rise)), h("span", { class: "sub" }, azimuthLabel(pass.rise.azimuthDeg))),
             h("span", { class: "cell cell-peak" }, label("Peak"), h("span", { class: "time" }, time(peak)), h("span", { class: "sub" }, `${fixed(pass.culmination.elevationDeg, 1)}°`)),
             h("span", { class: "cell cell-set" }, label("Set"), h("span", { class: "time" }, time(set)), h("span", { class: "sub" }, azimuthLabel(pass.set.azimuthDeg))),
-            h("span", { class: "cell cell-duration" }, label("Duration"), h("span", { class: "time" }, formatDuration(pass.set.t - pass.rise.t))),
+            h("span", { class: "cell cell-duration" }, label("Duration"), h("span", { class: "time" }, formatDuration(set - rise))),
             h("span", { class: "cell cell-visible" }, label("Visible"), h("span", { class: "visible-text" }, visibleText)),
         );
         button.addEventListener("click", () => {
