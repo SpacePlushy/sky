@@ -5,24 +5,23 @@ using Sky.Orbital.Propagation;
 namespace Sky.Orbital.Tests.CrossCheck;
 
 /// <summary>
-/// Milestone 1's coarse pass finder against Skyfield's pass events for the ISS over Phoenix,
-/// 7 days from 2026-09-24 04:00 UTC. The finder samples every 10 s, so its bounds follow from
-/// the step: rise is reported up to one step late, set up to one step early, and the peak
-/// within one step. Skyfield's events are root-found; Sky treats UTC as UT1 while Skyfield's
-/// data used UT1 - UTC = +0.096 s, which moves crossings by under 0.05 s. The half-second
-/// slack below covers that.
+/// Milestone 1's pass finder against refined Skyfield pass events for the ISS over Phoenix, 7 days
+/// from 2026-09-24 04:00 UTC. The reference events use UT1 = UTC, as Sky's production path does,
+/// and are refined with Skyfield's own altitude function to well under a microsecond, so the
+/// bounds below are exact consequences of the finder's design, with 1 ms of slack for rounding:
+/// rise is the first 10 s sample at or above 10 degrees, so 0 to 10 s late; set is the last, so
+/// 0 to 10 s early; the peak is refined in 0.1 s steps, so it is within 0.1 s of the true peak and
+/// at most 0.054 degrees low (the line of sight turns at most 7.7 km/s / 410 km = 1.08 deg/s).
 /// </summary>
 public class PassCrossCheckTests
 {
     private static readonly SkyfieldReference Reference = SkyfieldReference.Instance;
     private static readonly DateTimeOffset WindowStart = new(2026, 9, 24, 4, 0, 0, TimeSpan.Zero);
     private static readonly TimeSpan Step = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan Slack = TimeSpan.FromSeconds(0.5);
+    private static readonly TimeSpan Slack = TimeSpan.FromMilliseconds(1);
 
-    // Peak elevation can fall below the true maximum by the elevation drop within half a step of
-    // the peak. Skyfield's samples around the 68.8 degree pass show curvature up to 0.0202 deg/s^2,
-    // so the drop within 5 s is at most 0.506 degrees. Tolerance 0.6 degrees.
-    private const double PeakElevationShortfallDegrees = 0.6;
+    private static readonly TimeSpan PeakTimeBound = TimeSpan.FromSeconds(0.1);
+    private const double PeakElevationShortfallDegrees = 0.06;
 
     [Theory]
     [InlineData(10.0, 25)]
@@ -38,7 +37,7 @@ public class PassCrossCheckTests
             new TopocentricFrame(Reference.ObserverLocation),
             WindowStart,
             WindowStart.AddDays(7),
-            minimumElevation);
+            minimumElevation).Passes;
 
         Assert.Equal(expected.Count, found.Count);
         foreach (var (sky, reference) in found.Zip(expected))
@@ -49,11 +48,11 @@ public class PassCrossCheckTests
                 Assert.InRange(reference.Set.Utc - sky.Set.Time, -Slack, Step + Slack);
             }
 
-            Assert.InRange(sky.Culmination.Time - reference.Culmination.Utc, -(Step + Slack), Step + Slack);
+            Assert.InRange(sky.Culmination.Time - reference.Culmination.Utc, -(PeakTimeBound + Slack), PeakTimeBound + Slack);
             Assert.InRange(
                 sky.Culmination.ElevationDegrees,
                 reference.Culmination.ElevationDeg - PeakElevationShortfallDegrees,
-                reference.Culmination.ElevationDeg + 0.01);
+                reference.Culmination.ElevationDeg + 1e-6);
         }
     }
 }

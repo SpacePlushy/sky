@@ -117,6 +117,98 @@ def converged_geodetic(x, y, z):
     return math.degrees(lat), math.sqrt(hyp * hyp + rho * rho) - a_c
 
 
+def parse_utc(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def utc_text(instant):
+    return instant.isoformat().replace("+00:00", "Z")
+
+
+def find_refined_passes(ts, sat, observer, start, end):
+    """Complete passes above 10 degrees, with each event refined well below a microsecond."""
+    origin = start
+
+    def at(seconds):
+        # Seconds since the start, as a float, keep sub-nanosecond resolution over 7 days.
+        return ts.utc(origin.year, origin.month, origin.day, origin.hour, origin.minute, origin.second + seconds)
+
+    def look(seconds):
+        alt, az, _ = (sat - observer).at(at(seconds)).altaz()
+        return float(alt.degrees), float(az.degrees)
+
+    def elevation(seconds):
+        return look(seconds)[0]
+
+    def instant(seconds):
+        return origin + timedelta(seconds=seconds)
+
+    def bisect(lo, hi, rising):
+        # Invariant: elevation(lo) is on the "before" side of 10 degrees, elevation(hi) after it.
+        if (elevation(lo) >= 10.0) == rising or (elevation(hi) >= 10.0) != rising:
+            sys.exit(f"Bracket {lo}..{hi} s does not straddle the 10 degree crossing.")
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            above = elevation(mid) >= 10.0
+            if above == rising:
+                hi = mid
+            else:
+                lo = mid
+            if hi - lo < 1e-7:
+                break
+        return hi if rising else lo
+
+    def golden_max(lo, hi):
+        ratio = (math.sqrt(5) - 1) / 2
+        a, b = lo, hi
+        c, d = b - ratio * (b - a), a + ratio * (b - a)
+        fc, fd = elevation(c), elevation(d)
+        while b - a > 1e-5:
+            if fc >= fd:
+                b, d, fd = d, c, fc
+                c = b - ratio * (b - a)
+                fc = elevation(c)
+            else:
+                a, c, fc = c, d, fd
+                d = a + ratio * (b - a)
+                fd = elevation(d)
+        return (a + b) / 2
+
+    def event(seconds):
+        elev, az = look(seconds)
+        return {"utc": utc_text(instant(seconds)), "azimuth_deg": az, "elevation_deg": elev}
+
+    t0 = ts.from_datetime(start)
+    t1 = ts.from_datetime(end)
+    times, kinds = sat.find_events(observer, t0, t1, altitude_degrees=10.0)
+    passes, current = [], {}
+    for t, kind in zip(times, kinds):
+        seconds = (t.utc_datetime() - origin).total_seconds()
+        if kind == 0:
+            current = {"rise_guess": seconds}
+        elif kind == 1 and "rise_guess" in current:
+            current["culmination_guess"] = seconds
+        elif kind == 2 and "culmination_guess" in current:
+            rise = bisect(current["rise_guess"] - 2.0, current["rise_guess"] + 2.0, rising=True)
+            set_ = bisect(seconds - 2.0, seconds + 2.0, rising=False)
+            peak = golden_max(current["culmination_guess"] - 2.0, current["culmination_guess"] + 2.0)
+            for guess, refined in ((current["rise_guess"], rise), (seconds, set_), (current["culmination_guess"], peak)):
+                if abs(guess - refined) > 1.0:
+                    sys.exit(f"Refined event moved {refined - guess} s from find_events; expected under 1 s.")
+            passes.append({
+                "rise": event(rise),
+                "culmination": event(peak),
+                "set": event(set_),
+                "find_events": {
+                    "rise_utc": utc_text(instant(current["rise_guess"])),
+                    "culmination_utc": utc_text(instant(current["culmination_guess"])),
+                    "set_utc": utc_text(instant(seconds)),
+                },
+            })
+            current = {}
+    return passes
+
+
 def vector(xyz):
     return [float(c) for c in xyz]
 
@@ -178,30 +270,25 @@ def main():
     # Python datetimes and .NET ticks.
     instants = [SAMPLE_START + timedelta(seconds=2592 * k) for k in range(100)]
 
-    # Pass events above 10 degrees over 7 days, for the pass-finding tests.
-    t0 = ts.from_datetime(SAMPLE_START)
-    t1 = ts.from_datetime(SAMPLE_START + timedelta(days=7))
-    times, events = sat.find_events(observer, t0, t1, altitude_degrees=10.0)
-    passes, current = [], {}
-    for t, event in zip(times, events):
-        alt, az, _ = (sat - observer).at(t).altaz()
-        point = {"utc": t.utc_datetime().isoformat().replace("+00:00", "Z"),
-                 "azimuth_deg": float(az.degrees), "elevation_deg": float(alt.degrees)}
-        if event == 0:
-            current = {"rise": point}
-        elif event == 1 and "rise" in current:
-            current["culmination"] = point
-        elif event == 2 and "culmination" in current:
-            current["set"] = point
-            passes.append(current)
-            current = {}
+    # Pass events above 10 degrees over 7 days, for the pass-finding tests. These use a second
+    # timescale with UT1 = UTC (constant Delta-T = TT - UTC = 32.184 s + 37 s), which is the
+    # assumption Sky's production path makes, so pass comparisons have no UT1 difference.
+    # find_events stops refining once its bracket is under half a second, so each event is then
+    # refined with Skyfield's own altitude function: bisection for rise and set, golden-section
+    # search for the peak. find_events' own times are kept alongside for transparency.
+    ts_utc = load.timescale(delta_t=69.184)
+    if abs(float(ts_utc.utc(2026, 9, 24).dut1)) > 1e-9:
+        sys.exit("The UT1 = UTC timescale is not UT1 = UTC.")
+    sat_utc = EarthSatellite.from_omm(ts_utc, ISS_OMM)
+    set_exact_epoch(sat_utc.model, ISS_OMM["EPOCH"])
+    passes = find_refined_passes(ts_utc, sat_utc, observer, SAMPLE_START, SAMPLE_START + timedelta(days=7))
 
     # Dense samples every 20 s through the highest pass in the first 3 days, from 2 minutes
     # before rise to 2 minutes after set. This covers elevations from the horizon to the peak.
-    early = [p for p in passes if datetime.fromisoformat(p["rise"]["utc"]) < SAMPLE_START + timedelta(days=3)]
+    early = [p for p in passes if parse_utc(p["rise"]["utc"]) < SAMPLE_START + timedelta(days=3)]
     highest = max(early, key=lambda p: p["culmination"]["elevation_deg"])
-    rise = datetime.fromisoformat(highest["rise"]["utc"]).replace(microsecond=0) - timedelta(minutes=2)
-    end = datetime.fromisoformat(highest["set"]["utc"]) + timedelta(minutes=2)
+    rise = parse_utc(highest["rise"]["utc"]).replace(microsecond=0) - timedelta(minutes=2)
+    end = parse_utc(highest["set"]["utc"]) + timedelta(minutes=2)
     k = 0
     while rise + timedelta(seconds=20 * k) <= end:
         instants.append(rise + timedelta(seconds=20 * k))
@@ -225,7 +312,7 @@ def main():
             "ut1_minus_utc_s is what Skyfield's built-in tables give for each instant, and Sky's tests feed the same value to Sky, so the comparison checks the math whatever UT1 is.",
             "Skyfield 1.55's built-in UT1-UTC for these dates (about +0.096 s) is out of date: IERS Bulletin A of 24 September 2026 (Vol. XXXIX No. 039) gives -0.013473 s observed on 2026-09-24. Real-world figures for Sky's assumption A5 use the IERS value.",
             "Look angles are geometric: no refraction, no light-time.",
-            "Pass events come from Skyfield find_events at 10 degrees elevation.",
+            "Pass events use a second timescale with UT1 = UTC (Sky's production assumption). Each event from Skyfield's find_events (which stops within half a second) is refined with Skyfield's own altitude function: bisection for rise and set to under 1 microsecond, golden-section search for the peak. find_events' own times are kept under find_events.",
         ],
         "elements": ISS_OMM,
         "observer": OBSERVER,
