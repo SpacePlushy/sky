@@ -55,7 +55,7 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     public void ClearBlock(string group)
     {
         ValidateGroup(group);
-        State state = LoadState(group);
+        State state = LoadState(group, []);
         if (state.Blocked is not null)
         {
             SaveState(group, state with { Blocked = null });
@@ -68,8 +68,8 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     private async Task<GpCacheResult> GetGroupCoreAsync(string group, bool forceRefresh, CancellationToken cancellationToken)
     {
         DateTimeOffset now = time.GetUtcNow();
-        State state = LoadState(group);
         var warnings = new List<string>();
+        State state = LoadState(group, warnings);
         IReadOnlyList<GpRecord>? cached = LoadCachedRecords(group, warnings);
 
         bool due = cached is null || state.DownloadedUtc is null || now - state.DownloadedUtc >= RefreshAge;
@@ -104,7 +104,11 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     private async Task<(State State, IReadOnlyList<GpRecord>? Records)> DownloadAsync(
         string group, State state, DateTimeOffset now, List<string> warnings, CancellationToken cancellationToken)
     {
+        // Record the attempt on disk before sending anything. If this run is interrupted while the
+        // request is in flight (Ctrl+C, a crash, a debugger stop), CelesTrak may still have served
+        // it, so the 2-hour rule must count it.
         state = state with { LastAttemptUtc = now };
+        SaveState(group, state);
         FetchOutcome outcome = await client.FetchGroupAsync(group, cancellationToken).ConfigureAwait(false);
 
         switch (outcome)
@@ -192,12 +196,27 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         }
     }
 
-    private State LoadState(string group)
+    private State LoadState(string group, List<string> warnings)
     {
         string path = StatePath(group);
-        return File.Exists(path)
-            ? JsonSerializer.Deserialize<State>(File.ReadAllText(path), StateJson) ?? new State()
-            : new State();
+        if (!File.Exists(path))
+        {
+            return new State();
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<State>(File.ReadAllText(path), StateJson) ?? new State();
+        }
+        catch (JsonException ex)
+        {
+            // Fail safe: the state file is rewritten on every attempt, so its modification time is
+            // no earlier than the last request. Treating that as the last attempt keeps the 2-hour
+            // rule; the next attempt rewrites the file.
+            DateTimeOffset written = new(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
+            warnings.Add($"The request state for GROUP={group} could not be read ({ex.Message}); treating {Format(written)}, when it was last written, as the last request.");
+            return new State { LastAttemptUtc = written };
+        }
     }
 
     private void SaveState(string group, State state) =>

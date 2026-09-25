@@ -9,6 +9,7 @@ namespace Sky.CelesTrak.Tests;
 internal sealed class ScriptedHandler : HttpMessageHandler
 {
     private readonly Queue<Func<HttpResponseMessage>> _responses = new();
+    private bool _hang;
 
     public List<Uri> Requests { get; } = [];
 
@@ -18,20 +19,33 @@ internal sealed class ScriptedHandler : HttpMessageHandler
         return this;
     }
 
+    /// <summary>The next request hangs until it is cancelled, like a run interrupted mid-download.</summary>
+    public ScriptedHandler HangUntilCancelled()
+    {
+        _hang = true;
+        return this;
+    }
+
     public ScriptedHandler FailWithNetworkError()
     {
         _responses.Enqueue(() => throw new HttpRequestException("Simulated network failure."));
         return this;
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request.RequestUri!);
+        if (_hang)
+        {
+            _hang = false;
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+
         if (_responses.Count == 0)
         {
             throw new InvalidOperationException($"Unexpected request to {request.RequestUri}: no response was scripted.");
         }
 
-        return Task.FromResult(_responses.Dequeue()());
+        return _responses.Dequeue()();
     }
 }

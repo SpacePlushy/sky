@@ -207,6 +207,56 @@ public sealed class GpCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task A_run_interrupted_mid_request_still_counts_toward_the_2_hour_rule()
+    {
+        // The request may have reached CelesTrak before the interruption (Ctrl+C, crash, debugger
+        // stop), so the attempt must be on disk before the request is sent.
+        _server.HangUntilCancelled();
+        using var interrupt = new CancellationTokenSource();
+        var interrupted = NewCache().GetGroupAsync("stations", interrupt.Token);
+        while (_server.Requests.Count == 0)
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        await interrupt.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => interrupted);
+
+        _clock.Advance(TimeSpan.FromMinutes(119));
+        var tooSoon = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests);
+        Assert.Equal(GpDataSource.None, tooSoon.Source);
+
+        _server.Respond(HttpStatusCode.OK, Stations);
+        _clock.Advance(TimeSpan.FromMinutes(1));
+        var allowed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Equal(2, _server.Requests.Count);
+        Assert.Equal(GpDataSource.Downloaded, allowed.Source);
+    }
+
+    [Fact]
+    public async Task An_unreadable_state_file_falls_back_to_its_modification_time()
+    {
+        // Fail safe: without readable state, the last request is taken to be when the state file
+        // was last written, so the 2-hour rule still holds, and the problem is reported.
+        Directory.CreateDirectory(_directory);
+        string statePath = Path.Combine(_directory, "stations.state.json");
+        await File.WriteAllTextAsync(statePath, "{ not json", TestContext.Current.CancellationToken);
+        File.SetLastWriteTimeUtc(statePath, (Start - TimeSpan.FromHours(1)).UtcDateTime);
+
+        var tooSoon = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+        Assert.Empty(_server.Requests);
+        Assert.Contains(tooSoon.Warnings, w => w.Contains("state", StringComparison.OrdinalIgnoreCase));
+
+        _server.Respond(HttpStatusCode.OK, Stations);
+        _clock.Advance(TimeSpan.FromHours(1));
+        var recovered = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests);
+        Assert.Equal(GpDataSource.Downloaded, recovered.Source);
+    }
+
+    [Fact]
     public async Task Concurrent_requests_for_a_group_share_one_download()
     {
         _server.Respond(HttpStatusCode.OK, Stations);
