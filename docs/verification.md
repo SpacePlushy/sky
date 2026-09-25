@@ -216,6 +216,38 @@ fails any request.
 | A simulated clock | Allowed only with offline mode, so it never reaches the request history |
 | The Docker image | CI plants private files with a sentinel value (`appsettings.Local.json`, `web/.env.local`), builds the image, and scans the exported filesystem of the image and of the web build stage, requiring grep's "not found" status exactly; then runs the container offline and checks the API and page answer |
 
+### Alerts and the calendar (Milestone 4)
+
+| Check | How | Result |
+|---|---|---|
+| RFC 5545 structure | CRLF line ends; lines folded at 75 octets of UTF-8 without splitting a character, checked with two-octet degree signs; TEXT escaping; UTC `DTSTART` and `DTEND` with a Z, rounded to the second; `DTSTAMP` and an alarm `DESCRIPTION` in every event | All |
+| The events are the core's | One event per visible part, in order, on its rounded times, equal to `PassFinder` and `Visibility` directly; all passes with `visibleOnly=false` | Equal |
+| UIDs stable across element sets | The elements shifted by 10 ms and 30 s of along-track motion either way, kept self-consistent: identical UIDs. The previous rise-minute key fails three of the four | Identical |
+| Revolution numbers | Consecutive passes differ by the number of orbits between their peaks; the first follows the recorded REV_AT_EPOCH | Exact |
+| Descriptions | Their local times equal `DTSTART` and `DTEND` in the observer's zone; each carries the element epoch and any warning | All |
+| Nothing to export | 404 problem details, never a calendar with no events | Exact |
+| Alert scheduling | Unit tests of the pure modules: which event each pass alerts for, alert times from the server clock and the lead, the late-open case, de-duplication within 2 minutes, rescheduling, pruning after the clock goes back, two tabs due at once under the lock, and a throwing Notification constructor | 189 dashboard unit tests pass |
+
+The calendar format is tested; calendar apps are not. Apple Calendar and Outlook are documented to
+keep imported alarms; Google Calendar ignores them and applies its own default notifications.
+
+### The dashboard in a browser (Milestones 3 and 4)
+
+Playwright drives the built dashboard in Chromium against the real API, offline, with the demo
+cache on a simulated clock. Every test fails on any request to a host other than 127.0.0.1.
+
+| Check | Result |
+|---|---|
+| Telemetry matches `/now` at the same moment; the pass list matches `/passes`, visible passes marked in text | Pass |
+| A selected pass survives a refresh whose rises moved by 1 ms; keyboard selection | Pass |
+| Times in America/Phoenix with the browser in Asia/Tokyo and de-DE | Pass |
+| 375 px wide: no sideways scrolling, passes as cards | Pass |
+| An alert fires exactly once for the first visible pass, at start minus the lead; a blocked permission reads blocked; focus stays on the toggle while permission is pending; a preference change reaches another open tab | Pass |
+| The calendar download parses, one event per visible part; the link is hidden while loading or after a failure, and replaced by a note when nothing is visible | Pass |
+| Accessible names on the map and sky plot; rows reachable with Tab | Pass |
+
+14 browser tests, run in CI on every push.
+
 ### CelesTrak data and policy
 
 | Check | How |

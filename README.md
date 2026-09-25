@@ -10,8 +10,8 @@ Heavens-Above.
 seven days of passes with the visible ones highlighted, and a polar sky plot of the selected
 pass](docs/images/dashboard-desktop.png)
 
-> **Status:** all four milestones are built and waiting for the owner's review. The suite has 391
-> .NET tests, 171 unit tests for the dashboard, and 10 browser tests. All of them run offline, and CI
+> **Status:** all four milestones are built and waiting for the owner's review. The suite has 400
+> .NET tests, 189 unit tests for the dashboard, and 14 browser tests. All of them run offline, and CI
 > runs the .NET tests on Linux, macOS, and Windows.
 
 ## What it does
@@ -23,8 +23,9 @@ pass](docs/images/dashboard-desktop.png)
 - **Which passes you can see**: the satellite in sunlight while the observer's sky is dark (the
   Sun more than 6° below the horizon), and exactly when each visible stretch starts and ends, and
   why (it rises, leaves the Earth's shadow, sets, or goes into shadow).
-- **Alerts**: a browser notification a few minutes before a visible pass, and a calendar file
-  whose alarms work on a phone.
+- **Alerts**: a browser notification a few minutes before a visible pass while the dashboard is
+  open, and a calendar file of visible passes with a 10-minute alarm on each (Apple Calendar and
+  Outlook keep the alarm; Google Calendar uses its own reminders for imported events).
 - **A command-line tool**, `sky`, that prints the same predictions.
 
 ## How it is verified
@@ -101,15 +102,20 @@ SKY_CACHE_DIR="$HOME/Library/Application Support/sky/celestrak" SKY_CLOCK_START=
 
 ```bash
 dotnet run --project src/Sky.Cli -- now                # where the ISS is right now
-dotnet run --project src/Sky.Cli -- passes --visible   # the passes you can see this week
+dotnet run --project src/Sky.Cli -- passes --visible --count 20   # the passes you can see this week
 ```
 
 **The tests:**
 
 ```bash
 dotnet test --solution Sky.slnx                        # orbital math, cache policy, CLI, API
-cd web && npm ci && npm test && npm run e2e            # dashboard unit and browser tests
+cd web && npm ci && npm test                           # dashboard unit tests
+npx playwright install chromium && npm run e2e         # browser tests (in web/)
 ```
+
+The browser tests start the API offline with `dotnet`, so they need the .NET SDK too (on macOS
+with Homebrew, export `DOTNET_ROOT`; see `web/README.md`). On Linux, install Chromium with
+`npx playwright install --with-deps chromium`.
 
 To use your own location, copy `src/Sky.Cli/appsettings.Local.example.json` to
 `appsettings.Local.json` in the same folder and edit it; the CLI and the API both read it. It is

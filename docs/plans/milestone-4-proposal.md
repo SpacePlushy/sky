@@ -1,7 +1,8 @@
 # Milestone 4 proposal: Alerts and polish
 
-**Status:** Self-reviewed 2026-09-25, not approved by the owner, for the same reason as Milestones 2
-and 3. A multi-agent review stands in for approval; its outcome is recorded at the end.
+**Status:** Built 2026-09-25 without the owner's approval, for the same reason as Milestones 2 and 3.
+This plan had no separate review before the build; the built code had an adversarial multi-agent
+review, and what it changed is recorded at the end.
 **Date:** 2026-09-25.
 
 ## Goal
@@ -12,7 +13,8 @@ present the project to someone who has five minutes.
 ### Done when
 
 - Visible passes can raise a browser notification a chosen number of minutes before they start,
-  and can be exported as a calendar file whose alarms work on a phone.
+  and can be exported as a calendar file with an alarm on each visible pass (kept by Apple Calendar
+  and Outlook; Google Calendar uses its own reminders for imported events).
 - Playwright tests drive the built dashboard against the API, offline, in CI.
 - The README opens with what the project is, a screenshot, how it is verified, and how to run it.
 
@@ -28,7 +30,7 @@ present the project to someone who has five minutes.
 
 ## Alerts
 
-- **Browser notifications.** A bell control asks for permission only when clicked. The lead time
+- **Browser notifications.** A control asks for permission only when clicked. The lead time
   is 5, 10, or 15 minutes, stored in the browser. The page schedules a notification for each
   upcoming visible pass from the pass list and the server clock, reschedules when the passes
   refresh, and never notifies twice for one pass. They work only while a dashboard tab is open,
@@ -75,3 +77,30 @@ owner to write.
 
 - Notifications when no dashboard tab is open (web push needs keys and a service).
 - Accounts, hosting beyond the local machine, and brightness predictions.
+
+## Code review
+
+An adversarial review of the built milestone (calendar, alerts, and tests-and-docs lenses, each
+finding checked by a skeptic) confirmed 17 findings. They changed the build:
+
+- **Calendar UIDs** came from the minute a pass rises, so new elements moving a rise across a
+  minute boundary duplicated events on re-import. They now come from the revolution number at the
+  culmination (REV_AT_EPOCH plus node crossings), which new elements do not change.
+- **An empty export** is a 404 problem, not a calendar with no events, which RFC 5545 forbids; the
+  dashboard shows the link only when there is a visible pass to export.
+- **Event descriptions** round times as DTSTART does, and carry the epoch and any element-age or
+  SGP4 warning, since the file outlives the page.
+- **"Alarms work on a phone"** was not true for Google Calendar, which ignores imported alarms; the
+  README, the dashboard, and the code say which apps keep them.
+- **Alerts across tabs**: a Web Lock serializes the check, so two tabs cannot both notify; a
+  preference changed in one tab reaches the others; a restarted simulated clock no longer silences
+  replayed passes; a browser whose notification constructor throws (Chrome for Android) shows the
+  control as unavailable instead of on; the toggle keeps focus while the permission prompt is open.
+- **End-to-end tests** pick passes by rise time, not position, so the pass ending a minute after the
+  demo clock starts cannot shift them.
+
+Two limits remain, stated rather than hidden. Chromium passes storage changes between tabs
+asynchronously, so the lock makes a duplicate alert very unlikely rather than impossible; the
+shared tag then replaces the first notification rather than adding a second. And after a restart of
+the simulated clock, a replayed pass alerts again only if a tab checks within about 26 seconds of
+the restart; later, a stale entry cannot be told apart from a real one.
