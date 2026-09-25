@@ -456,4 +456,25 @@ public sealed class GpCacheTests : IDisposable
         Assert.False(Directory.Exists(_directory), "Offline mode must not create or write the cache folder.");
         await Assert.ThrowsAsync<InvalidOperationException>(() => offline.ClearBlockAsync("stations", TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task A_lock_held_too_long_by_another_process_serves_the_cache_without_a_request()
+    {
+        _server.Respond(HttpStatusCode.OK, Stations);
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromHours(7)); // due for a refresh
+
+        // Stand in for a stuck process by holding the lock file open exclusively.
+        using (new FileStream(Path.Combine(_directory, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            using var cache = new GpCache(_directory, new CelesTrakClient(new HttpClient(_server)), _clock) { LockTimeout = TimeSpan.FromMilliseconds(300) };
+            var result = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+            Assert.Single(_server.Requests);
+            Assert.Equal(GpDataSource.Cache, result.Source);
+            Assert.Equal(22, result.Records.Count);
+            Assert.Contains(result.Warnings, w => w.Contains("cache lock", StringComparison.Ordinal));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => cache.ClearBlockAsync("stations", TestContext.Current.CancellationToken));
+        }
+    }
 }

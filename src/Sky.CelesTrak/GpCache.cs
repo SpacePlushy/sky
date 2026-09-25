@@ -38,6 +38,7 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
 {
     private static readonly TimeSpan LockPollInterval = TimeSpan.FromMilliseconds(100);
 
+
     private static readonly TimeSpan RefreshAge = TimeSpan.FromHours(6);
     private static readonly TimeSpan MinimumInterval = TimeSpan.FromHours(2);
     private static readonly TimeSpan MaximumBackoff = TimeSpan.FromHours(24);
@@ -45,6 +46,12 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     private static readonly JsonSerializerOptions StateJson = new() { WriteIndented = true };
 
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// How long to wait for another process's lock before serving cached data instead. Longer than
+    /// a request can take: the client allows 30 s for headers and 30 s for the body. Tests shorten it.
+    /// </summary>
+    internal TimeSpan LockTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
     /// <summary>Gets the element sets for a group, downloading them only when the policy allows.</summary>
     /// <param name="group">A CelesTrak group name, such as "stations" or "visual".</param>
@@ -61,8 +68,20 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            using FileStream processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false);
-            return await GetGroupCoreAsync(group, forceRefresh, cancellationToken).ConfigureAwait(false);
+            FileStream? processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false);
+            if (processLock is null)
+            {
+                // Another process has held the lock for longer than any request can take. Waiting on
+                // would stall this caller indefinitely; asking CelesTrak without the lock could
+                // repeat that process's request. Serve what is cached, and say why.
+                GpCacheResult cached = GetGroupOffline(group);
+                return cached with { Warnings = [$"Another process has held the cache lock for over {LockTimeout.TotalMinutes:F0} minutes, so GROUP={group} was not refreshed; serving cached data.", .. cached.Warnings.Where(w => !w.StartsWith("Offline mode", StringComparison.Ordinal))] };
+            }
+
+            using (processLock)
+            {
+                return await GetGroupCoreAsync(group, forceRefresh, cancellationToken).ConfigureAwait(false);
+            }
         }
         finally
         {
@@ -83,7 +102,8 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            using FileStream processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false);
+            using FileStream processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException($"Another process has held the cache lock for over {LockTimeout.TotalMinutes:F0} minutes; try again when it finishes.");
             State state = LoadState(group, []);
             if (state.Blocked is not null)
             {
@@ -97,25 +117,32 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     }
 
     /// <summary>
-    /// Waits for the exclusive lock that coordinates processes sharing the folder. FileShare.None is
-    /// an exclusive flock on Linux and macOS and a sharing lock on Windows; both conflict with any
-    /// other open of the file with FileShare.None, in this process or another.
+    /// Waits for the exclusive lock that coordinates processes sharing the folder, or returns null
+    /// after <see cref="LockTimeout"/>. FileShare.None is an exclusive flock on Linux and macOS and a
+    /// sharing lock on Windows; both conflict with any other open of the file with FileShare.None,
+    /// in this process or another. The lock file is never deleted, so there is no race on its identity.
     /// </summary>
-    private async Task<FileStream> AcquireProcessLockAsync(CancellationToken cancellationToken)
+    private async Task<FileStream?> AcquireProcessLockAsync(CancellationToken cancellationToken)
     {
         System.IO.Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, ".lock");
+
+        // The real clock, not the injected one: the holder's progress does not depend on this
+        // instance's notion of time.
+        var waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
             try
             {
                 return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
             }
+            catch (IOException) when (waited.Elapsed < LockTimeout)
+            {
+                await Task.Delay(LockPollInterval, cancellationToken).ConfigureAwait(false);
+            }
             catch (IOException)
             {
-                // Held by another process or instance: wait on the real clock, not the injected one,
-                // since the holder's progress does not depend on this instance's notion of time.
-                await Task.Delay(LockPollInterval, cancellationToken).ConfigureAwait(false);
+                return null;
             }
         }
     }
@@ -271,7 +298,7 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
 
         try
         {
-            return OmmParser.Parse(File.ReadAllText(path));
+            return OmmParser.Parse(ReadShared(path));
         }
         catch (FormatException ex)
         {
@@ -290,7 +317,7 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
 
         try
         {
-            return JsonSerializer.Deserialize<State>(File.ReadAllText(path), StateJson) ?? new State();
+            return JsonSerializer.Deserialize<State>(ReadShared(path), StateJson) ?? new State();
         }
         catch (JsonException ex)
         {
@@ -307,6 +334,18 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
                 Blocked = new BlockRecord(0, string.Empty, problem, written),
             };
         }
+    }
+
+    /// <summary>
+    /// Reads a cache file without denying other processes write or delete access. On Windows,
+    /// File.ReadAllText would stop another process from replacing the file by rename while it reads;
+    /// Linux and macOS never block that.
+    /// </summary>
+    private static string ReadShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private void SaveState(string group, State state) =>

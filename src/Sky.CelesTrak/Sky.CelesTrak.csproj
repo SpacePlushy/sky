@@ -4,4 +4,8 @@
     <ProjectReference Include="..\Sky.Orbital\Sky.Orbital.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sky.CelesTrak.Tests" />
+  </ItemGroup>
+
 </Project>

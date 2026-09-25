@@ -76,10 +76,11 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
     {
         var groups = await GroupsAsync(cancellationToken).ConfigureAwait(false);
         DateTimeOffset now = time.GetUtcNow();
+        // The same choice FindAsync makes: the first group holding the satellite, newest epoch there.
         return groups
-            .SelectMany(g => g.Records.Select(r => (Group: g.Group, Record: r)))
+            .SelectMany((g, order) => g.Records.Select(r => (Order: order, Group: g.Group, Record: r)))
             .GroupBy(x => x.Record.Elements.CatalogNumber)
-            .Select(g => g.MaxBy(x => x.Record.Elements.Epoch))
+            .Select(g => g.Where(x => x.Order == g.Min(y => y.Order)).MaxBy(x => x.Record.Elements.Epoch))
             .Select(x => new SatelliteSummary(
                 x.Record.Elements.CatalogNumber,
                 x.Record.Name ?? $"NORAD {x.Record.Elements.CatalogNumber}",
@@ -259,34 +260,37 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
         return new SkyPoint(Utc(t), look.AzimuthDegrees, look.ElevationDegrees, EarthShadow.IsSunlit(ecef.Position, Sun.PositionEcef(t)));
     }
 
+    /// <summary>
+    /// The element set the CLI would use: the configured groups in order, the first that holds
+    /// the satellite, and its newest epoch there.
+    /// </summary>
     private async Task<(GpRecord Record, IReadOnlyList<string> Warnings)> FindAsync(long id, CancellationToken cancellationToken)
     {
         var groups = await GroupsAsync(cancellationToken).ConfigureAwait(false);
-        // MaxBy on value tuples throws when nothing matches, so test for a match first.
-        var matches = groups
-            .SelectMany(g => g.Records.Select(r => (Group: g, Record: r)))
-            .Where(x => x.Record.Elements.CatalogNumber == id)
-            .ToList();
-        if (matches.Count == 0)
+        foreach (GpCacheResult group in groups)
         {
-            string[] unavailable = groups.Where(g => g.Records.Count == 0).SelectMany(g => g.Warnings).ToArray();
-            if (groups.All(g => g.Records.Count == 0))
+            GpRecord? record = group.Records.Where(r => r.Elements.CatalogNumber == id).MaxBy(r => r.Elements.Epoch);
+            if (record is null)
             {
-                throw new ApiException(503, "No orbital data", "No element sets are available. " + string.Join(" ", unavailable));
+                continue;
             }
 
-            throw new ApiException(404, "Unknown satellite", $"NORAD {id} is not in {string.Join(", ", groups.Where(g => g.Records.Count > 0).Select(g => g.Group))}.");
+            var warnings = new List<string>(group.Warnings);
+            double age = (time.GetUtcNow() - record.Elements.Epoch).TotalDays;
+            if (age > 3)
+            {
+                warnings.Add($"{record.Name} elements are {age:F1} days old; predictions degrade by kilometers per day of element age.");
+            }
+
+            return (record, warnings);
         }
 
-        var match = matches.MaxBy(x => x.Record.Elements.Epoch);
-        var warnings = new List<string>(match.Group.Warnings);
-        double age = (time.GetUtcNow() - match.Record.Elements.Epoch).TotalDays;
-        if (age > 3)
+        if (groups.All(g => g.Records.Count == 0))
         {
-            warnings.Add($"{match.Record.Name} elements are {age:F1} days old; predictions degrade by kilometers per day of element age.");
+            throw new ApiException(503, "No orbital data", "No element sets are available. " + string.Join(" ", groups.SelectMany(g => g.Warnings)));
         }
 
-        return (match.Record, warnings);
+        throw new ApiException(404, "Unknown satellite", $"NORAD {id} is not in {string.Join(", ", groups.Where(g => g.Records.Count > 0).Select(g => g.Group))}.");
     }
 
     private static Sgp4Propagator CreatePropagator(GpRecord record)

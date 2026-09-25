@@ -222,6 +222,7 @@ public sealed class EndpointTests : IDisposable
     [InlineData("/api/satellites/25544/passes?minElevation=90", 400, "Invalid minimum elevation")]
     [InlineData("/api/satellites/25544/track?minutes=0", 400, "Invalid track length")]
     [InlineData("/api/nothing-here", 404, "Not found")]
+    [InlineData("/api/satellites/abc/now", 404, "Not found")]
     public async Task Errors_are_problem_details_without_internals(string url, int status, string title)
     {
         using var response = await _client.GetAsync(new Uri(url, UriKind.Relative), TestContext.Current.CancellationToken);
