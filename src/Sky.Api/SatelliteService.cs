@@ -2,6 +2,7 @@ using System.Globalization;
 using Sky.CelesTrak;
 using Sky.Orbital;
 using Sky.Orbital.Astronomy;
+using Sky.Orbital.Elements;
 using Sky.Orbital.Frames;
 using Sky.Orbital.Passes;
 using Sky.Orbital.Propagation;
@@ -263,23 +264,31 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, SkyC
         }
 
         DateTimeOffset t = Millisecond(_time.GetUtcNow());
-        var (record, _) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
+        var (record, warnings) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
         Sgp4Propagator propagator = CreatePropagator(record);
         string name = record.Name ?? $"NORAD {id}";
+        PassSearchResult search = PassFinder.Find(propagator, _observer, t, t.AddDays(d), settings.MinimumElevationDegrees);
+
+        // The file outlives the page, so every event carries the caveats the dashboard shows.
+        var caveats = new List<string> { string.Create(CultureInfo.InvariantCulture, $"Predicted from elements with epoch {record.Elements.Epoch.UtcDateTime:yyyy-MM-dd HH:mm} UTC, on {Utc(t):yyyy-MM-dd HH:mm} UTC.") };
+        caveats.AddRange(warnings);
+        if (search.StoppedAt is { } stoppedAt)
+        {
+            caveats.Add(string.Create(CultureInfo.InvariantCulture, $"SGP4 stopped at {stoppedAt.UtcDateTime:yyyy-MM-dd HH:mm} UTC ({search.StoppedBy}); later passes are not included."));
+        }
+
         var events = new List<CalendarEvent>();
-        foreach (SatellitePass pass in PassFinder.Find(propagator, _observer, t, t.AddDays(d), settings.MinimumElevationDegrees).Passes)
+        foreach (SatellitePass pass in search.Passes)
         {
             var windows = Visibility.Windows(pass, propagator, _observer);
-
-            // Keyed by the satellite and the minute the pass rises, so a later export with slightly
-            // different elements updates the event rather than adding a second one.
-            string key = string.Create(CultureInfo.InvariantCulture, $"{id}-{pass.Rise.Time.UtcDateTime:yyyyMMdd'T'HHmm}");
+            string key = PassKey(record, pass, propagator);
             string details = string.Join("\n", [
                 $"Rises {Describe(pass.Rise)}",
                 $"Peak {Describe(pass.Culmination)}",
                 $"Sets {Describe(pass.Set)}",
                 $"Observer: {settings.ObserverName}",
                 "Visible means sunlit, with the Sun below -6° at the observer.",
+                .. caveats,
             ]);
             if (visibleOnly ?? true)
             {
@@ -305,18 +314,74 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, SkyC
             }
         }
 
+        if (events.Count == 0)
+        {
+            throw new ApiException(404, "No passes to export", (visibleOnly ?? true)
+                ? $"{name} has no visible passes in the next {d} days, so there is nothing to add to a calendar."
+                : $"{name} has no passes in the next {d} days.");
+        }
+
         return Calendar.Write($"{name} passes over {settings.ObserverName}", events, t, alarm);
 
+        // Times rounded to the second as DTSTART and DTEND are, and azimuths shown as 0 to 359.
         string Describe(PassEvent e) => string.Create(
             CultureInfo.InvariantCulture,
-            $"{Local(e.Time)} at {e.ElevationDegrees:F0}° elevation, {Compass(e.AzimuthDegrees)} ({e.AzimuthDegrees:F0}°)");
+            $"{Local(e.Time)} at {e.ElevationDegrees:F0}° elevation, {Compass(e.AzimuthDegrees)} ({(int)Math.Round(e.AzimuthDegrees) % 360}°)");
 
         string Local(DateTimeOffset instant)
         {
-            DateTimeOffset local = TimeZoneInfo.ConvertTime(instant, settings.TimeZone);
+            DateTimeOffset local = TimeZoneInfo.ConvertTime(Calendar.RoundToSecond(instant), settings.TimeZone);
             TimeSpan offset = local.Offset;
             return string.Create(CultureInfo.InvariantCulture, $"{local:yyyy-MM-dd HH:mm:ss} UTC{(offset < TimeSpan.Zero ? "-" : "+")}{offset.Duration():hh\\:mm}");
         }
+    }
+
+    /// <summary>
+    /// What identifies a pass across element sets, for calendar UIDs: the revolution number at the
+    /// culmination. New elements move a pass by seconds, which a key from its clock time can turn
+    /// into a different minute; the revolution number changes only at the ascending node, and a
+    /// pass seen from mid-latitudes peaks far from the node. It is the revolution number at the
+    /// epoch (REV_AT_EPOCH) plus the node crossings since: the accumulated argument of latitude,
+    /// estimated from the mean elements (good to tens of degrees over days), less the true argument
+    /// of latitude at the culmination, in whole turns. Without a revolution number, or for an
+    /// equatorial orbit with no defined node, the key falls back to the minute of the culmination.
+    /// An element set whose epoch lies within a fraction of a degree of the node can count its
+    /// revolution differently from these mean elements, and so shift every key by one.
+    /// </summary>
+    internal static string PassKey(GpRecord record, SatellitePass pass, Sgp4Propagator propagator)
+    {
+        long id = record.Elements.CatalogNumber;
+        DateTimeOffset culmination = pass.Culmination.Time;
+        PropagationResult state = propagator.Propagate(culmination);
+        if (record.RevolutionAtEpoch is { } revolutionAtEpoch && state.Succeeded && ArgumentOfLatitudeDegrees(state.State) is { } u)
+        {
+            MeanElements e = record.Elements;
+            double u0 = ((e.ArgumentOfPericenter + e.MeanAnomaly) % 360.0 + 360.0) % 360.0;
+            double turns = e.MeanMotion * (culmination - e.Epoch).TotalDays;
+            long crossings = (long)Math.Round(((u0 + (360.0 * turns)) - u) / 360.0);
+            return string.Create(CultureInfo.InvariantCulture, $"{id}-r{revolutionAtEpoch + crossings}");
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{id}-{culmination.UtcDateTime:yyyyMMdd'T'HHmm}");
+    }
+
+    /// <summary>The angle from the ascending node to the satellite in its orbit plane, degrees in [0, 360), or null for an equatorial orbit.</summary>
+    internal static double? ArgumentOfLatitudeDegrees(TemeState state)
+    {
+        Vec3 r = state.Position;
+        Vec3 v = state.Velocity;
+        var h = new Vec3((r.Y * v.Z) - (r.Z * v.Y), (r.Z * v.X) - (r.X * v.Z), (r.X * v.Y) - (r.Y * v.X));
+        var node = new Vec3(-h.Y, h.X, 0.0); // z × h
+        if (node.Length < 1e-9 * h.Length)
+        {
+            return null;
+        }
+
+        Vec3 n = node * (1.0 / node.Length);
+        Vec3 hUnit = h * (1.0 / h.Length);
+        var inPlane = new Vec3((hUnit.Y * n.Z) - (hUnit.Z * n.Y), (hUnit.Z * n.X) - (hUnit.X * n.Z), (hUnit.X * n.Y) - (hUnit.Y * n.X)); // ĥ × n̂
+        double u = Math.Atan2(r.Dot(inPlane), r.Dot(n)) * RadiansToDegrees;
+        return u < 0 ? u + 360.0 : u;
     }
 
     /// <summary>A 16-point compass direction for an azimuth.</summary>

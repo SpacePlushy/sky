@@ -12,14 +12,17 @@ namespace Sky.Api;
 internal sealed record CalendarEvent(DateTimeOffset Start, DateTimeOffset End, string Summary, string Description, string Key);
 
 /// <summary>
-/// Writes an iCalendar file (RFC 5545) of pass events, each with an alarm before it starts, so a
-/// phone's calendar can give the alert when no dashboard is open.
+/// Writes an iCalendar file (RFC 5545) of pass events, each with a display alarm before it starts.
+/// Apple Calendar and Outlook keep such alarms; Google Calendar ignores alarms in imported files and
+/// applies its own default notifications.
 /// </summary>
 /// <remarks>
 /// Times are UTC, written with a Z (RFC 5545 §3.3.5, form 2), so every calendar shows them in its
 /// own zone correctly. Text is escaped (§3.3.11), lines end in CRLF, and lines longer than 75 octets
 /// of UTF-8 are folded (§3.1) without splitting a character. Each event's UID comes from its key,
-/// so importing a later export updates events instead of duplicating them.
+/// which callers make stable across element sets, so importing a later export updates matching
+/// events instead of duplicating them. A calendar needs at least one component (§3.6), so an empty
+/// list of events is refused.
 /// </remarks>
 internal static class Calendar
 {
@@ -30,8 +33,13 @@ internal static class Calendar
     /// <param name="events">The events.</param>
     /// <param name="stamp">When the file was made (DTSTAMP).</param>
     /// <param name="alarmMinutes">How many minutes before each event its alarm goes off.</param>
-    public static string Write(string name, IEnumerable<CalendarEvent> events, DateTimeOffset stamp, int alarmMinutes)
+    public static string Write(string name, IReadOnlyCollection<CalendarEvent> events, DateTimeOffset stamp, int alarmMinutes)
     {
+        if (events.Count == 0)
+        {
+            throw new InvalidOperationException("An iCalendar file needs at least one event (RFC 5545 §3.6).");
+        }
+
         var lines = new List<string>
         {
             "BEGIN:VCALENDAR",
@@ -74,12 +82,14 @@ internal static class Calendar
     }
 
     /// <summary>An instant as an RFC 5545 UTC date-time, rounded to the nearest second.</summary>
-    internal static string Utc(DateTimeOffset instant)
+    internal static string Utc(DateTimeOffset instant) =>
+        RoundToSecond(instant).UtcDateTime.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+
+    /// <summary>The nearest whole second, halves up: the rounding the CLI and the dashboard use too.</summary>
+    internal static DateTimeOffset RoundToSecond(DateTimeOffset instant)
     {
-        DateTime utc = instant.UtcDateTime;
-        long remainder = utc.Ticks % TimeSpan.TicksPerSecond;
-        utc = remainder >= TimeSpan.TicksPerSecond / 2 ? utc.AddTicks(TimeSpan.TicksPerSecond - remainder) : utc.AddTicks(-remainder);
-        return utc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture);
+        long remainder = instant.UtcTicks % TimeSpan.TicksPerSecond;
+        return remainder >= TimeSpan.TicksPerSecond / 2 ? instant.AddTicks(TimeSpan.TicksPerSecond - remainder) : instant.AddTicks(-remainder);
     }
 
     /// <summary>Escapes TEXT: backslash, semicolon, comma, and line breaks (RFC 5545 §3.3.11).</summary>

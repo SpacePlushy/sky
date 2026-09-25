@@ -67,6 +67,7 @@ public static class OmmParser
         {
             Name = OptionalString(record, "OBJECT_NAME"),
             ObjectId = OptionalString(record, "OBJECT_ID"),
+            RevolutionAtEpoch = OptionalLong(record, "REV_AT_EPOCH"),
             EphemerisType = (int)RequiredDouble(record, "EPHEMERIS_TYPE", context),
             Elements = new MeanElements
             {
@@ -137,6 +138,15 @@ public static class OmmParser
 
         throw new FormatException($"{context} has a {name} that is not a finite number: {value.GetRawText()}.");
     }
+
+    /// <summary>A whole number if present and valid, else null: for fields Sky can do without.</summary>
+    private static long? OptionalLong(JsonElement record, string name) =>
+        record.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out long number)
+            ? number
+            : record.TryGetProperty(name, out value) && value.ValueKind == JsonValueKind.String
+                && long.TryParse(value.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out long parsed)
+                ? parsed
+                : null;
 
     private static long RequiredLong(JsonElement record, string name)
     {

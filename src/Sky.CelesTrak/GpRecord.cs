@@ -11,6 +11,12 @@ public sealed record GpRecord
     /// <summary>International designator, such as "1998-067A".</summary>
     public string? ObjectId { get; init; }
 
+    /// <summary>
+    /// The revolution number at the epoch (OMM REV_AT_EPOCH), counted at ascending-node crossings,
+    /// or null when missing or not a whole number. It identifies a pass across element sets.
+    /// </summary>
+    public long? RevolutionAtEpoch { get; init; }
+
     /// <summary>Ephemeris type. 0 is SGP4; 4 is SGP4-XP, which SGP4 cannot propagate.</summary>
     public required int EphemerisType { get; init; }
 
