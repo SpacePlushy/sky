@@ -34,14 +34,20 @@ public sealed class CelesTrakClient(HttpClient httpClient)
     internal static Uri GroupUri(string group) =>
         new($"https://celestrak.org/NORAD/elements/gp.php?GROUP={group}&FORMAT=JSON");
 
+    private static readonly TimeSpan BodyTimeout = TimeSpan.FromSeconds(30);
+
     /// <summary>Requests one group once.</summary>
+    /// <remarks>
+    /// The status is read before the body. Once CelesTrak has answered with a status, that answer
+    /// stands even if the body is lost: a non-200 still blocks the group (with the read error in
+    /// place of the body), and a 200 whose body is lost counts as a network failure.
+    /// </remarks>
     internal async Task<FetchOutcome> FetchGroupAsync(string group, CancellationToken cancellationToken)
     {
+        HttpResponseMessage response;
         try
         {
-            using HttpResponseMessage response = await httpClient.GetAsync(GroupUri(group), cancellationToken).ConfigureAwait(false);
-            string body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            return new FetchOutcome.Answered((int)response.StatusCode, body);
+            response = await httpClient.GetAsync(GroupUri(group), HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         }
         catch (HttpRequestException ex)
         {
@@ -50,6 +56,25 @@ public sealed class CelesTrakClient(HttpClient httpClient)
         catch (TaskCanceledException ex) when (!cancellationToken.IsCancellationRequested)
         {
             return new FetchOutcome.Unreachable($"Timed out: {ex.Message}");
+        }
+
+        using (response)
+        {
+            int status = (int)response.StatusCode;
+            using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bodyTimeout.CancelAfter(BodyTimeout);
+            try
+            {
+                string body = await response.Content.ReadAsStringAsync(bodyTimeout.Token).ConfigureAwait(false);
+                return new FetchOutcome.Answered(status, body);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested
+                && ex is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
+            {
+                return status == 200
+                    ? new FetchOutcome.Unreachable($"The download was interrupted: {ex.Message}")
+                    : new FetchOutcome.Answered(status, $"(the response body could not be read: {ex.Message})");
+            }
         }
     }
 }

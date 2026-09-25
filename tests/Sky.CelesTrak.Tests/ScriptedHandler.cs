@@ -13,6 +13,19 @@ internal sealed class ScriptedHandler : HttpMessageHandler
 
     public List<Uri> Requests { get; } = [];
 
+    /// <summary>Runs when a request arrives, before it is answered.</summary>
+    public Action<Uri>? OnRequest { get; set; }
+
+    /// <summary>How long each response is held back, so concurrent callers overlap.</summary>
+    public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+
+    /// <summary>The next response has this status, but its body fails partway through reading.</summary>
+    public ScriptedHandler RespondWithBrokenBody(HttpStatusCode status)
+    {
+        _responses.Enqueue(() => new HttpResponseMessage(status) { Content = new StreamContent(new BrokenStream()) });
+        return this;
+    }
+
     public ScriptedHandler Respond(HttpStatusCode status, string body)
     {
         _responses.Enqueue(() => new HttpResponseMessage(status) { Content = new StringContent(body) });
@@ -35,6 +48,12 @@ internal sealed class ScriptedHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests.Add(request.RequestUri!);
+        OnRequest?.Invoke(request.RequestUri!);
+        if (Delay > TimeSpan.Zero)
+        {
+            await Task.Delay(Delay, cancellationToken);
+        }
+
         if (_hang)
         {
             _hang = false;
@@ -47,5 +66,31 @@ internal sealed class ScriptedHandler : HttpMessageHandler
         }
 
         return _responses.Dequeue()();
+    }
+
+    /// <summary>A stream that fails as soon as it is read, like a connection reset mid-body.</summary>
+    private sealed class BrokenStream : Stream
+    {
+        public override bool CanRead => true;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => false;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new IOException("Simulated connection reset.");
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

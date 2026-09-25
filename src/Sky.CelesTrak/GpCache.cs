@@ -72,7 +72,17 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         State state = LoadState(group, warnings);
         IReadOnlyList<GpRecord>? cached = LoadCachedRecords(group, warnings);
 
-        bool due = cached is null || state.DownloadedUtc is null || now - state.DownloadedUtc >= RefreshAge;
+        if (state.LastAttemptUtc > now)
+        {
+            // The clock was ahead when the state was written and has since been corrected. The real
+            // request happened at or before the real present, so counting the 2-hour rule from now
+            // is safe, and it cannot lock the group out until some future date.
+            warnings.Add($"GROUP={group} was last requested at {Format(state.LastAttemptUtc.Value)}, which is in the future; the system clock has moved back. Counting the 2-hour rule from now.");
+            state = state with { LastAttemptUtc = now };
+            SaveState(group, state);
+        }
+
+        bool due = cached is null || state.DownloadedUtc is null || state.DownloadedUtc > now || now - state.DownloadedUtc >= RefreshAge;
         if (due || forceRefresh)
         {
             if (state.Blocked is { } blocked)
@@ -147,9 +157,10 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
 
     private static State Block(State state, int status, string body, DateTimeOffset now, string group, List<string> warnings, string? problem)
     {
+        // CelesTrak answered, so it is reachable: the network backoff no longer applies.
         var blocked = new BlockRecord(status, Excerpt(body), problem, now);
         warnings.Add(BlockedMessage(group, blocked));
-        return state with { Blocked = blocked };
+        return state with { Blocked = blocked, NetworkFailures = 0 };
     }
 
     /// <summary>How long to wait after the last attempt: 2 hours, or the network-failure backoff.</summary>

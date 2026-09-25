@@ -104,9 +104,11 @@ public sealed class GpCacheTests : IDisposable
     {
         _server.Respond(HttpStatusCode.OK, Stations).Respond(status, body);
         await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        string saved = await File.ReadAllTextAsync(Path.Combine(_directory, "stations.json"), TestContext.Current.CancellationToken);
         _clock.Advance(TimeSpan.FromHours(7));
 
         var failed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Equal(saved, await File.ReadAllTextAsync(Path.Combine(_directory, "stations.json"), TestContext.Current.CancellationToken));
 
         // The good data is still served, and the response is reported word for word.
         Assert.Equal(2, _server.Requests.Count);
@@ -188,8 +190,10 @@ public sealed class GpCacheTests : IDisposable
         var recovered = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
         Assert.Equal(GpDataSource.Downloaded, recovered.Source);
 
-        _clock.Advance(TimeSpan.FromHours(6.1)); // the normal 6-hour refresh, not a long backoff
-        var refreshed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        // Exactly 2 hours later a forced refresh is allowed only if the backoff (4 h after two
+        // failures) was reset by the success.
+        _clock.Advance(TimeSpan.FromHours(2));
+        var refreshed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken, forceRefresh: true);
 
         Assert.Equal(4, _server.Requests.Count);
         Assert.Equal(GpDataSource.Downloaded, refreshed.Source);
@@ -212,6 +216,8 @@ public sealed class GpCacheTests : IDisposable
         // The request may have reached CelesTrak before the interruption (Ctrl+C, crash, debugger
         // stop), so the attempt must be on disk before the request is sent.
         _server.HangUntilCancelled();
+        string? stateWhenSent = null;
+        _server.OnRequest = _ => stateWhenSent = File.ReadAllText(Path.Combine(_directory, "stations.state.json"));
         using var interrupt = new CancellationTokenSource();
         var interrupted = NewCache().GetGroupAsync("stations", interrupt.Token);
         while (_server.Requests.Count == 0)
@@ -221,6 +227,9 @@ public sealed class GpCacheTests : IDisposable
 
         await interrupt.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => interrupted);
+        _server.OnRequest = null;
+        Assert.NotNull(stateWhenSent);
+        Assert.Contains("2026-09-24T23:10:00", stateWhenSent, StringComparison.Ordinal); // the attempt, already on disk
 
         _clock.Advance(TimeSpan.FromMinutes(119));
         var tooSoon = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
@@ -284,9 +293,86 @@ public sealed class GpCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task A_non_200_whose_body_fails_to_arrive_still_blocks_the_group()
+    {
+        // CelesTrak answered; only the body was lost. That is a non-200 answer, not a network failure.
+        _server.RespondWithBrokenBody(HttpStatusCode.Forbidden);
+
+        var result = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromDays(1));
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+        Assert.Single(_server.Requests);
+        Assert.Contains(result.Warnings, w => w.Contains("403", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_200_whose_body_fails_to_arrive_is_a_network_failure()
+    {
+        _server.RespondWithBrokenBody(HttpStatusCode.OK).Respond(HttpStatusCode.OK, Stations);
+
+        var failed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromHours(2));
+        var retried = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+        Assert.Contains(failed.Warnings, w => w.Contains("Could not reach CelesTrak", StringComparison.Ordinal));
+        Assert.Equal(GpDataSource.Downloaded, retried.Source);
+    }
+
+    [Fact]
+    public async Task Any_celestrak_answer_resets_the_network_backoff()
+    {
+        // Two network failures set a 4 hour wait. A 403 is an answer, so after a person clears the
+        // block the normal 2-hour rule applies, not the old backoff.
+        _server.FailWithNetworkError().FailWithNetworkError().Respond(HttpStatusCode.Forbidden, "Forbidden");
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromHours(2));
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromHours(4));
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Equal(3, _server.Requests.Count);
+
+        var cache = NewCache();
+        cache.ClearBlock("stations");
+        _clock.Advance(TimeSpan.FromHours(2));
+        _server.Respond(HttpStatusCode.OK, Stations);
+        var recovered = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, _server.Requests.Count);
+        Assert.Equal(GpDataSource.Downloaded, recovered.Source);
+    }
+
+    [Fact]
+    public async Task Timestamps_from_the_future_do_not_lock_the_group_out()
+    {
+        // The clock was ahead when the state was written, then corrected. The real request happened
+        // at or before the real present, so the 2-hour rule counts from now.
+        Directory.CreateDirectory(_directory);
+        string future = (Start + TimeSpan.FromDays(30)).ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        await File.WriteAllTextAsync(
+            Path.Combine(_directory, "stations.state.json"),
+            $$"""{"LastAttemptUtc":"{{future}}","DownloadedUtc":"{{future}}","NetworkFailures":0,"Blocked":null}""",
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(_directory, "stations.json"), Stations, TestContext.Current.CancellationToken);
+
+        var now = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Empty(_server.Requests);
+        Assert.Contains(now.Warnings, w => w.Contains("future", StringComparison.Ordinal));
+
+        _server.Respond(HttpStatusCode.OK, Stations);
+        _clock.Advance(TimeSpan.FromHours(2));
+        var later = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests);
+        Assert.Equal(GpDataSource.Downloaded, later.Source);
+    }
+
+    [Fact]
     public async Task Concurrent_requests_for_a_group_share_one_download()
     {
+        // The response is held for 200 ms: without the lock, all three callers would find no data and
+        // send their own requests while the first one waits.
         _server.Respond(HttpStatusCode.OK, Stations);
+        _server.Delay = TimeSpan.FromMilliseconds(200);
         var cache = NewCache();
 
         var results = await Task.WhenAll(
