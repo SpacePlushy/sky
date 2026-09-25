@@ -1,0 +1,785 @@
+/*
+ * Sky Over Phoenix: a dark mission-control dashboard.
+ *
+ * The colors below are the same values as src/palette.ts, which a unit test checks against WCAG
+ * contrast minimums and against this file. Change them in both places.
+ */
+
+:root {
+    /* Page and panels */
+    --bg: #05070b;
+    --panel: #0b1017;
+    --raised: #131b26;
+    --border: #1f2b39;
+
+    /* Text */
+    --text: #e6edf3;
+    --muted: #9aabbd;
+
+    /* The two accents: live data, and visible passes */
+    --accent: #3dd3ec;
+    --visible: #f5b942;
+    --visible-bg: #211906;
+
+    /* Banners */
+    --notice-text: #9ddcf2;
+    --notice-bg: #08202a;
+    --warn-text: #ffcf70;
+    --warn-bg: #241a05;
+    --error-text: #ffa198;
+    --error-bg: #2a0e0e;
+
+    /* Map */
+    --ocean: #070c13;
+    --land: #1a2531;
+    --land-edge: #5b7490;
+    --graticule: #1b2735;
+    --track-past: #7aa7b8;
+    --track-shadow: #99a9ff;
+    --observer: #f2f5f8;
+    --shade: #000000;
+
+    /* Sky plot */
+    --sky-bg: #0d151f;
+    --sky-ring: #27384a;
+    --sky-rim: #6f8398;
+    --sky-path: #b7c4d1;
+
+    /* Translucent map layers */
+    --night-opacity: 0.5;
+    --dark-opacity: 0.35;
+    --footprint-fill-opacity: 0.1;
+
+    --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+    color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.mono,
+.live,
+.time,
+.sub,
+.telemetry .value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Header */
+
+.masthead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 10px 24px;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.brand {
+    min-width: 0;
+}
+
+.brand h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.observer {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+}
+
+.picker {
+    display: flex;
+    flex: 1 1 220px;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    max-width: 380px;
+}
+
+.picker label,
+.clock dt {
+    color: var(--muted);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+select {
+    width: 100%;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--muted);
+    border-radius: 4px;
+    background: var(--panel);
+    color: var(--text);
+    font: inherit;
+}
+
+.clocks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 20px;
+    margin: 0 0 0 auto;
+}
+
+.clock dd {
+    margin: 0;
+}
+
+.live {
+    color: var(--accent);
+    font-size: 1.125rem;
+}
+
+.zone,
+.date {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+/* Banners */
+
+.banners {
+    display: grid;
+    gap: 8px;
+    padding: 12px 16px 0;
+}
+
+.banners:empty {
+    display: none;
+}
+
+.banner {
+    margin: 0;
+    padding: 8px 12px;
+    border: 1px solid;
+    border-radius: 4px;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.banner-notice {
+    border-color: var(--notice-text);
+    background: var(--notice-bg);
+}
+
+.banner-notice strong {
+    color: var(--notice-text);
+}
+
+.banner-warning {
+    border-color: var(--warn-text);
+    background: var(--warn-bg);
+}
+
+.banner-warning strong {
+    color: var(--warn-text);
+}
+
+.banner-error {
+    border-color: var(--error-text);
+    background: var(--error-bg);
+}
+
+.banner-error strong {
+    color: var(--error-text);
+}
+
+/* Layout: one column on a phone; map and telemetry over passes and sky plot on a desktop. */
+
+.layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px 16px 16px;
+}
+
+@media (min-width: 1100px) {
+    .layout {
+        grid-template-areas:
+            "map telemetry"
+            "passes sky";
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+        align-items: start;
+    }
+
+    .panel-map {
+        grid-area: map;
+    }
+
+    .panel-telemetry {
+        grid-area: telemetry;
+        align-self: stretch;
+    }
+
+    .panel-passes {
+        grid-area: passes;
+    }
+
+    /* The pass list is long; the sky plot stays in view beside it. */
+    .panel-sky {
+        position: sticky;
+        top: 12px;
+        grid-area: sky;
+    }
+}
+
+.panel {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+}
+
+.panel h2 {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.panel-note {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 0.8125rem;
+}
+
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+    margin: 8px 0 0;
+    padding: 0;
+    color: var(--muted);
+    font-size: 0.8125rem;
+    list-style: none;
+}
+
+.legend li {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.swatch {
+    flex: none;
+    width: 28px;
+    height: 12px;
+    overflow: visible;
+}
+
+/* Map */
+
+.map-frame {
+    width: 100%;
+}
+
+.map {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.map-ocean {
+    fill: var(--ocean);
+}
+
+.map-graticule {
+    fill: none;
+    stroke: var(--graticule);
+    stroke-width: 1;
+}
+
+.map-land {
+    fill: var(--land);
+}
+
+.map-night {
+    fill: var(--shade);
+    fill-opacity: var(--night-opacity);
+}
+
+.map-dark {
+    fill: var(--shade);
+    fill-opacity: var(--dark-opacity);
+}
+
+.map-coast {
+    fill: none;
+    stroke: var(--land-edge);
+    stroke-width: 0.75;
+    stroke-linejoin: round;
+}
+
+.map-footprint-horizon {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
+}
+
+.map-footprint {
+    fill: var(--accent);
+    fill-opacity: var(--footprint-fill-opacity);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+}
+
+.map-track-line {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.map-track-line.is-future {
+    stroke-width: 2.5;
+}
+
+.map-track-line.is-future.is-sunlit {
+    stroke: var(--accent);
+}
+
+.map-track-line.is-future.is-shadow {
+    stroke: var(--track-shadow);
+}
+
+.map-track-line.is-past {
+    stroke: var(--track-past);
+    stroke-width: 1.25;
+}
+
+.map-track-line.is-shadow {
+    stroke-dasharray: 5 4;
+    stroke-linecap: butt;
+}
+
+.map-observer-mark {
+    fill: var(--observer);
+    stroke: var(--bg);
+    stroke-width: 1.5;
+}
+
+.map-satellite-dot {
+    fill: var(--accent);
+    stroke: var(--bg);
+    stroke-width: 2;
+}
+
+.map-satellite-halo,
+.sky-now-halo {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: pulse 2.4s ease-out infinite;
+}
+
+.map-outline {
+    fill: none;
+    stroke: var(--border);
+}
+
+.swatch-night-land {
+    fill: var(--land);
+}
+
+@keyframes pulse {
+    from {
+        opacity: 0.9;
+        transform: scale(0.6);
+    }
+
+    to {
+        opacity: 0;
+        transform: scale(1.5);
+    }
+}
+
+/* Telemetry */
+
+.telemetry {
+    margin: 0;
+}
+
+.telemetry .row {
+    display: grid;
+    grid-template-columns: minmax(7rem, 38%) minmax(0, 1fr);
+    gap: 10px;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.telemetry .row:last-child {
+    border-bottom: 0;
+}
+
+.telemetry dt {
+    color: var(--muted);
+    font-size: 0.875rem;
+}
+
+.telemetry dd {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 8px;
+    min-width: 0;
+    margin: 0;
+}
+
+.telemetry .value {
+    color: var(--accent);
+}
+
+.telemetry .note {
+    color: var(--muted);
+    font-size: 0.8125rem;
+    overflow-wrap: anywhere;
+}
+
+/*
+ * Passes: stacked cards by default, a table once the panel is wide enough. The container query
+ * uses the panel's width, so the table never squeezes into a narrow column.
+ */
+
+.passes {
+    container: passes / inline-size;
+}
+
+.empty {
+    margin: 0;
+    color: var(--muted);
+}
+
+.pass-header {
+    display: none;
+}
+
+.pass-list {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.pass {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 12px;
+    width: 100%;
+    margin: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    appearance: none;
+}
+
+.pass:hover {
+    background: var(--raised);
+}
+
+.is-visible .pass {
+    border-left-color: var(--visible);
+    background: var(--visible-bg);
+}
+
+.is-selected .pass,
+.is-selected .pass:hover {
+    border-color: var(--accent);
+    background: var(--raised);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cell {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.cell-date {
+    flex-direction: row;
+    flex-wrap: wrap;
+    grid-column: 1 / -1;
+    align-items: center;
+    gap: 4px 8px;
+    font-weight: 600;
+}
+
+.cell-visible {
+    grid-column: 1 / -1;
+}
+
+.label {
+    color: var(--muted);
+    font-size: 0.6875rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.cell-date .label,
+.cell-visible .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.sub {
+    color: var(--muted);
+    font-size: 0.8125rem;
+}
+
+.visible-text {
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.is-visible .visible-text {
+    color: var(--visible);
+}
+
+.badges {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.badge {
+    padding: 1px 6px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.badge-visible {
+    background: var(--visible);
+    color: var(--bg);
+}
+
+.badge-live {
+    background: var(--accent);
+    color: var(--bg);
+}
+
+.badge-plotted {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+@container passes (min-width: 700px) {
+    .pass-header,
+    .pass {
+        grid-template-columns: 7.5rem 8.5rem 7rem 8.5rem 5.5rem minmax(0, 1fr);
+        column-gap: 12px;
+    }
+
+    .pass-header {
+        display: grid;
+        padding: 0 11px 4px 14px;
+        color: var(--muted);
+        font-size: 0.75rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+    }
+
+    .cell-date {
+        flex-direction: column;
+        grid-column: auto;
+        align-items: flex-start;
+    }
+
+    .cell-visible {
+        grid-column: auto;
+    }
+
+    .label {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+    }
+}
+
+/* Sky plot */
+
+.sky-frame {
+    max-width: 380px;
+    margin: 0 auto;
+}
+
+.skyplot {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.sky-disk {
+    fill: var(--sky-bg);
+}
+
+.sky-ring {
+    fill: none;
+    stroke: var(--sky-ring);
+    stroke-width: 1;
+}
+
+.sky-min-ring {
+    fill: none;
+    stroke: var(--sky-rim);
+    stroke-width: 1;
+    stroke-dasharray: 3 5;
+}
+
+.sky-rim {
+    fill: none;
+    stroke: var(--sky-rim);
+    stroke-width: 1.5;
+}
+
+.sky-ring-label,
+.sky-peak-label {
+    paint-order: stroke;
+    stroke: var(--sky-bg);
+    stroke-width: 3px;
+    stroke-linejoin: round;
+}
+
+.sky-ring-label {
+    fill: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 10px;
+}
+
+.sky-cardinal {
+    fill: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.sky-empty {
+    fill: var(--muted);
+    font-size: 13px;
+}
+
+.sky-path {
+    fill: none;
+    stroke: var(--sky-path);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.sky-path-visible {
+    stroke: var(--visible);
+    stroke-width: 5;
+}
+
+.sky-marker {
+    stroke-width: 2;
+}
+
+.sky-rise {
+    fill: var(--sky-bg);
+    stroke: var(--sky-path);
+}
+
+.sky-set,
+.sky-peak {
+    fill: var(--sky-path);
+    stroke: var(--sky-bg);
+}
+
+.sky-peak-label {
+    fill: var(--text);
+    font-family: var(--font-mono);
+    font-size: 11px;
+}
+
+.sky-now {
+    fill: var(--accent);
+    stroke: var(--bg);
+    stroke-width: 2;
+}
+
+.sky-caption {
+    margin: 8px 0 0;
+    font-size: 0.875rem;
+}
+
+/* Footer */
+
+.footer {
+    padding: 0 16px 24px;
+    color: var(--muted);
+    font-size: 0.8125rem;
+}
+
+.footer p {
+    margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .map-satellite-halo,
+    .sky-now-halo {
+        opacity: 0.6;
+        animation: none;
+    }
+
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition: none !important;
+    }
+}

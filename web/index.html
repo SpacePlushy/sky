@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="dark" />
+        <meta name="description" content="Satellite ground-station dashboard: live ground track, telemetry, 7-day pass predictions, and a sky plot for an observer in Phoenix, Arizona." />
+        <title>Sky Over Phoenix</title>
+        <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    </head>
+    <body>
+        <header class="masthead">
+            <div class="brand">
+                <h1>Sky Over Phoenix</h1>
+                <p id="observer-name" class="observer">Connecting to the API&hellip;</p>
+            </div>
+            <div class="picker">
+                <label for="satellite">Satellite</label>
+                <select id="satellite" disabled>
+                    <option>Loading&hellip;</option>
+                </select>
+            </div>
+            <dl class="clocks">
+                <div class="clock">
+                    <dt>Observer time</dt>
+                    <dd><span id="clock-local" class="live">--:--:--</span> <span id="clock-zone" class="zone"></span> <span id="clock-date" class="date"></span></dd>
+                </div>
+                <div class="clock">
+                    <dt>UTC</dt>
+                    <dd><span id="clock-utc" class="live">--:--:--</span></dd>
+                </div>
+            </dl>
+        </header>
+
+        <div id="banners" class="banners" aria-live="polite"></div>
+
+        <main class="layout">
+            <section class="panel panel-map" aria-labelledby="map-heading">
+                <h2 id="map-heading">Ground track</h2>
+                <div id="map" class="map-frame"></div>
+                <ul class="legend" aria-label="Map legend">
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" class="map-track-line is-future is-sunlit" /></svg>Ahead, sunlit</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" class="map-track-line is-future is-shadow" /></svg>Ahead, in shadow (dashed)</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" class="map-track-line is-past is-sunlit" /></svg>Behind (thin)</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><rect x="2" y="1" width="24" height="8" rx="4" class="map-footprint" /></svg>Above the minimum elevation</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><rect x="2" y="1" width="24" height="8" rx="4" class="map-footprint-horizon" /></svg>Above the horizon</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><rect x="1" y="1" width="26" height="8" class="swatch-night-land" /><rect x="10" y="1" width="17" height="8" class="map-night" /><rect x="19" y="1" width="8" height="8" class="map-dark" /></svg>Night; darker where the Sun is below &minus;6&deg;</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><path d="M14 0.5L18.5 5L14 9.5L9.5 5Z" class="map-observer-mark" /></svg>Observer</li>
+                </ul>
+            </section>
+
+            <section class="panel panel-telemetry" aria-labelledby="telemetry-heading">
+                <h2 id="telemetry-heading">Telemetry</h2>
+                <dl id="telemetry" class="telemetry"></dl>
+            </section>
+
+            <section class="panel panel-sky" aria-labelledby="sky-heading">
+                <h2 id="sky-heading">Sky plot</h2>
+                <p class="panel-note">Looking up: north at the top, east on the left, the zenith in the middle.</p>
+                <div id="skyplot" class="sky-frame"></div>
+                <p id="sky-caption" class="sky-caption"></p>
+                <ul class="legend" aria-label="Sky plot legend">
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" class="sky-path" /></svg>Path</li>
+                    <li><svg class="swatch" viewBox="0 0 28 10" aria-hidden="true"><line x1="1" y1="5" x2="27" y2="5" class="sky-path sky-path-visible" /></svg>Visible (thick)</li>
+                    <li><svg class="swatch" viewBox="0 0 28 12" aria-hidden="true"><circle cx="14" cy="6" r="4.5" class="sky-marker sky-rise" /></svg>Rise</li>
+                    <li><svg class="swatch" viewBox="0 0 28 12" aria-hidden="true"><path d="M14 1L19 6L14 11L9 6Z" class="sky-marker sky-peak" /></svg>Highest</li>
+                    <li><svg class="swatch" viewBox="0 0 28 12" aria-hidden="true"><rect x="10" y="2" width="8" height="8" class="sky-marker sky-set" /></svg>Set</li>
+                    <li><svg class="swatch" viewBox="0 0 28 12" aria-hidden="true"><circle cx="14" cy="6" r="4.5" class="sky-now" /></svg>Now</li>
+                </ul>
+            </section>
+            <section class="panel panel-passes" aria-labelledby="passes-heading">
+                <h2 id="passes-heading">Passes, next 7 days</h2>
+                <p id="passes-note" class="panel-note"></p>
+                <div id="passes" class="passes"></div>
+            </section>
+
+        </main>
+
+        <footer class="footer">
+            <p>
+                Orbital elements from CelesTrak, propagated with SGP4. Land outlines from Natural Earth (public domain).
+                Times are the server&rsquo;s clock shown in the observer&rsquo;s time zone.
+            </p>
+        </footer>
+
+        <noscript><p class="banner banner-error">This dashboard needs JavaScript.</p></noscript>
+        <script type="module" src="/src/main.ts"></script>
+    </body>
+</html>
