@@ -13,6 +13,7 @@
   <ItemGroup>
     <None Include="..\Sky.CelesTrak.Tests\Fixtures\stations-2026-09-24.json" Link="Fixtures\stations-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\Sky.Orbital.Tests\Data\Skyfield\iss-phoenix-2026-09-24.json" Link="Fixtures\iss-phoenix-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Sky.Orbital.Tests\Data\Skyfield\iss-phoenix-visibility-2026-09-24.json" Link="Fixtures\iss-phoenix-visibility-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

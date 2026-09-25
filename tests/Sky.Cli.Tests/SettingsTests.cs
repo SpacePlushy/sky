@@ -127,9 +127,10 @@ public sealed class SettingsTests : IDisposable
     [InlineData("""{"CelesTrak":{"Offline":"yes"}}""", "CelesTrak:Offline")]
     [InlineData("""{"Dashboard":{"Satellites":"25544,ISS"}}""", "Dashboard:Satellites")]
     [InlineData("""{"Dashboard":{"Satellites":"-5"}}""", "Dashboard:Satellites")]
-    [InlineData("""{"Clock":{"StartUtc":"2026-09-24T04:00:00"}}""", "Clock:StartUtc")]
-    [InlineData("""{"Clock":{"StartUtc":"2026-09-24T04:00:00-07:00"}}""", "Clock:StartUtc")]
+    [InlineData("""{"CelesTrak":{"Offline":true},"Clock":{"StartUtc":"2026-09-24T04:00:00"}}""", "Clock:StartUtc")]
+    [InlineData("""{"CelesTrak":{"Offline":true},"Clock":{"StartUtc":"2026-09-24T04:00:00-07:00"}}""", "Clock:StartUtc")]
     [InlineData("""{"Clock":{"Start":"2026-09-24T04:00:00Z"}}""", "Clock:Start")]
+    [InlineData("""{"Clock":{"StartUtc":"2026-09-24T04:00:00Z"}}""", "Clock:StartUtc needs CelesTrak:Offline")] // a simulated clock must never reach the request history
     public void Rejects_invalid_new_settings_and_names_them(string local, string setting)
     {
         _cli.WriteLocal(local);

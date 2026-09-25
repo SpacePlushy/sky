@@ -35,7 +35,8 @@ public sealed partial record SkySettings(
 
     /// <summary>
     /// If set, the clock starts at this instant when the program starts and runs at real speed
-    /// from there. For demonstrations and tests with recorded data; unset in normal use.
+    /// from there. For demonstrations and tests with recorded data; unset in normal use. Allowed
+    /// only with <see cref="Offline"/>, so a simulated time never reaches CelesTrak's request history.
     /// </summary>
     public DateTimeOffset? ClockStartUtc { get; init; }
 
@@ -81,6 +82,13 @@ public sealed partial record SkySettings(
         bool offline = Flag(config, "CelesTrak:Offline", problems);
         IReadOnlyList<long> satellites = ParseSatellites(config["Dashboard:Satellites"], problems);
         DateTimeOffset? clockStart = ParseInstant(config["Clock:StartUtc"], "Clock:StartUtc", problems);
+
+        if (clockStart is not null && !offline)
+        {
+            // A simulated clock would write false instants into the shared request history, which
+            // the 2-hour rule depends on, so it is only allowed when the cache never writes.
+            problems.Add("Clock:StartUtc needs CelesTrak:Offline set to true: a simulated clock must not reach CelesTrak or its request history.");
+        }
 
         if (problems.Count > 0)
         {

@@ -1,7 +1,9 @@
 namespace Sky.Api;
 
-// The JSON the dashboard reads. Every instant is UTC and serializes with a Z (DateTime of kind
-// Utc); the browser converts to the observer's IANA zone only for display.
+// The JSON the dashboard reads. Every instant is UTC, truncated to the millisecond (1 ms is the
+// root-finding tolerance, and ECMAScript's date format has three fractional digits), and
+// serializes with a Z (DateTime of kind Utc). The browser converts to the observer's IANA zone
+// only for display, and takes "now" from the server, whose clock can be simulated.
 
 /// <summary>The observer and dashboard settings.</summary>
 internal sealed record ConfigResponse(
@@ -9,6 +11,7 @@ internal sealed record ConfigResponse(
     double MinimumElevationDeg,
     IReadOnlyList<long> Satellites,
     bool Offline,
+    bool ClockSimulated,
     DateTime ServerTimeUtc);
 
 /// <summary>Where the observer is and which zone to show times in.</summary>
@@ -26,14 +29,15 @@ internal sealed record NowResponse(
     bool Sunlit,
     SunDto Sun,
     double FootprintRadiusDeg,
+    double VisibilityRadiusDeg,
     PassDto? CurrentPass,
     IReadOnlyList<string> Warnings);
 
 /// <summary>Which element set was used.</summary>
 internal sealed record SatelliteInfo(long Id, string Name, DateTime EpochUtc, double AgeDays, double PeriodMinutes);
 
-/// <summary>The point below the satellite, its height, and its speed.</summary>
-internal sealed record SubpointDto(double LatitudeDeg, double LongitudeDeg, double AltitudeKm, double SpeedKmS);
+/// <summary>The point below the satellite, its height, and its inertial speed (as the CLI prints it).</summary>
+internal sealed record SubpointDto(double LatitudeDeg, double LongitudeDeg, double AltitudeKm, double InertialSpeedKmS);
 
 /// <summary>Where the satellite appears from the observer.</summary>
 internal sealed record LookDto(double AzimuthDeg, double ElevationDeg, double RangeKm, double RangeRateKmS);
@@ -74,7 +78,7 @@ internal sealed record EventDto(DateTime TimeUtc, double AzimuthDeg, double Elev
 /// <summary>A visible part of a pass and what starts and ends it.</summary>
 internal sealed record VisibleDto(EventDto Start, string StartsBecause, EventDto Highest, EventDto End, string EndsBecause);
 
-/// <summary>A point on the sky-plot path.</summary>
+/// <summary>A point on the sky-plot path: every 10 s, plus rise, set, and each visible part's ends exactly.</summary>
 internal sealed record SkyPoint(DateTime TimeUtc, double AzimuthDeg, double ElevationDeg, bool Sunlit);
 
 /// <summary>Service status and data age.</summary>

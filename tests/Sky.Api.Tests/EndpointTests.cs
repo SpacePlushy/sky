@@ -44,6 +44,7 @@ public sealed class EndpointTests : IDisposable
         Assert.Equal(10.0, json.GetProperty("minimumElevationDeg").GetDouble());
         Assert.Equal(25544, json.GetProperty("satellites")[0].GetInt64());
         Assert.True(json.GetProperty("offline").GetBoolean());
+        Assert.False(json.GetProperty("clockSimulated").GetBoolean());
         Assert.Equal("2026-09-24T04:00:00Z", json.GetProperty("serverTimeUtc").GetString());
     }
 
@@ -106,27 +107,38 @@ public sealed class EndpointTests : IDisposable
         Assert.Equal(expected.Count, passes.Count);
         foreach (var (dto, pass) in passes.Zip(expected))
         {
-            Assert.Equal(pass.Rise.Time, Time(dto.GetProperty("rise")));
-            Assert.Equal(pass.Culmination.Time, Time(dto.GetProperty("culmination")));
-            Assert.Equal(pass.Set.Time, Time(dto.GetProperty("set")));
+            Assert.Equal(Ms(pass.Rise.Time), Time(dto.GetProperty("rise")));
+            Assert.Equal(Ms(pass.Culmination.Time), Time(dto.GetProperty("culmination")));
+            Assert.Equal(Ms(pass.Set.Time), Time(dto.GetProperty("set")));
             Assert.Equal(pass.Culmination.ElevationDegrees, dto.GetProperty("culmination").GetProperty("elevationDeg").GetDouble());
 
             var windows = Visibility.Windows(pass, propagator, Phoenix);
             var visible = dto.GetProperty("visible").EnumerateArray().ToList();
             Assert.Equal(windows.Count, visible.Count);
+            var path = dto.GetProperty("path").EnumerateArray().ToList();
+            var pathTimes = path.Select(Time).ToList();
             foreach (var (v, w) in visible.Zip(windows))
             {
-                Assert.Equal(w.Start.Time, Time(v.GetProperty("start")));
-                Assert.Equal(w.End.Time, Time(v.GetProperty("end")));
+                Assert.Equal(Ms(w.Start.Time), Time(v.GetProperty("start")));
+                Assert.Equal(Ms(w.End.Time), Time(v.GetProperty("end")));
+
+                // The path carries each visible part's ends exactly, for the sky plot.
+                Assert.Contains(Ms(w.Start.Time), pathTimes);
+                Assert.Contains(Ms(w.End.Time), pathTimes);
             }
 
-            // The sky-plot path runs from rise to set in 10 s steps, ending exactly at set.
-            var path = dto.GetProperty("path").EnumerateArray().ToList();
-            Assert.Equal(pass.Rise.Time, Time(path[0]));
-            Assert.Equal(pass.Set.Time, Time(path[^1]));
-            for (int k = 1; k < path.Count - 1; k++)
+            // The path runs from rise to set, in order, never more than 10 s apart, and every
+            // 10 s step from rise is present.
+            Assert.Equal(Ms(pass.Rise.Time), pathTimes[0]);
+            Assert.Equal(Ms(pass.Set.Time), pathTimes[^1]);
+            for (int k = 1; k < pathTimes.Count; k++)
             {
-                Assert.Equal(10.0, (Time(path[k]) - Time(path[k - 1])).TotalSeconds, 1e-6);
+                Assert.InRange((pathTimes[k] - pathTimes[k - 1]).TotalSeconds, 0.0005, 10.0005);
+            }
+
+            for (var t = pass.Rise.Time; t < pass.Set.Time; t = t.AddSeconds(10))
+            {
+                Assert.Contains(Ms(t), pathTimes);
             }
         }
 
@@ -148,6 +160,8 @@ public sealed class EndpointTests : IDisposable
         Assert.Equal((int)Math.Floor(2 * period * 60 / 30) + 1, points.Count);
         Assert.Equal(ApiHost.Start.AddMinutes(-period), Time(points[0]), TimeSpan.FromMilliseconds(1));
 
+        // Every point's values belong to the whole-millisecond time it reports.
+
         var propagator = Sgp4Propagator.Create(IssRecord.Elements);
         foreach (var point in points.Where((_, i) => i % 37 == 0))
         {
@@ -156,6 +170,38 @@ public sealed class EndpointTests : IDisposable
             Assert.Equal(subpoint.LatitudeDegrees, point.GetProperty("latitudeDeg").GetDouble(), 1e-12);
             Assert.Equal(subpoint.LongitudeDegrees, point.GetProperty("longitudeDeg").GetDouble(), 1e-12);
         }
+    }
+
+    [Fact]
+    public async Task The_subsolar_point_matches_de421()
+    {
+        // The Sun's direction is checked against DE421 to 0.0115° in the orbital tests; the
+        // subsolar point is that direction's latitude and longitude, so the same bound applies.
+        var sample = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "iss-phoenix-visibility-2026-09-24.json")))
+            .RootElement.GetProperty("sun_week")[37];
+        string at = sample.GetProperty("utc").GetString()!;
+        var sun = sample.GetProperty("earth_fixed_km");
+        double x = sun[0].GetDouble(), y = sun[1].GetDouble(), z = sun[2].GetDouble();
+
+        var json = await GetJson($"/api/satellites/25544/now?at={Uri.EscapeDataString(at)}");
+
+        Assert.Equal(Math.Atan2(z, Math.Sqrt((x * x) + (y * y))) * 180 / Math.PI, json.GetProperty("sun").GetProperty("subsolarLatitudeDeg").GetDouble(), 0.0115);
+        Assert.Equal(Math.Atan2(y, x) * 180 / Math.PI, json.GetProperty("sun").GetProperty("subsolarLongitudeDeg").GetDouble(), 0.0115 / Math.Cos(Math.Atan2(z, Math.Sqrt((x * x) + (y * y)))));
+    }
+
+    [Theory]
+    [InlineData(420.0, 0.0)]
+    [InlineData(420.0, 10.0)]
+    [InlineData(35_786.0, 10.0)]
+    [InlineData(800.0, 45.0)]
+    public void The_footprint_radius_puts_the_satellite_at_the_given_elevation(double heightKm, double elevationDeg)
+    {
+        // On the sphere of mean radius: an observer at central angle λ from the subpoint sees the
+        // satellite at elevation e with tan e = (cos λ − R/(R+h)) / sin λ. Invert-and-check.
+        const double R = 6371.0088;
+        double lambda = SatelliteService.FootprintRadiusDegrees(heightKm, elevationDeg) * Math.PI / 180;
+        double e = Math.Atan2(Math.Cos(lambda) - (R / (R + heightKm)), Math.Sin(lambda)) * 180 / Math.PI;
+        Assert.Equal(elevationDeg, e, 1e-9);
     }
 
     [Fact]
@@ -219,6 +265,9 @@ public sealed class EndpointTests : IDisposable
         Assert.True(response.IsSuccessStatusCode, $"{url}: {(int)response.StatusCode} {body}");
         return JsonDocument.Parse(body).RootElement.Clone();
     }
+
+    /// <summary>An instant truncated to the millisecond, as the API sends it.</summary>
+    private static DateTimeOffset Ms(DateTimeOffset t) => t.AddTicks(-(t.UtcTicks % TimeSpan.TicksPerMillisecond));
 
     private static DateTimeOffset Time(JsonElement e)
     {

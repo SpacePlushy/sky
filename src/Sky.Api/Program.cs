@@ -1,32 +1,35 @@
-using Microsoft.AspNetCore.Http.HttpResults;
 using Sky.Api;
 using Sky.CelesTrak;
 using Sky.Settings;
 
-// Settings come from the same files and SKY_ environment variables as the CLI.
-SkySettings settings;
+var builder = WebApplication.CreateBuilder(args);
+
+// Settings come from the same files and SKY_ environment variables as the CLI. They are loaded
+// when first needed, so a test host that supplies its own never reads the owner's local file.
+builder.Services.AddSingleton(_ => SkySettings.Load(AppContext.BaseDirectory, "SKY_"));
+builder.Services.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<SkySettings>().ClockStartUtc is { } start
+    ? new StartedClock(TimeProvider.System, start)
+    : TimeProvider.System);
+builder.Services.AddSingleton(sp =>
+{
+    SkySettings s = sp.GetRequiredService<SkySettings>();
+    return new GpCache(s.CacheDirectory, new CelesTrakClient(CelesTrakClient.CreateHttpClient()), sp.GetRequiredService<TimeProvider>(), s.Offline);
+});
+builder.Services.AddSingleton<SatelliteService>();
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+// Fail at startup, with the message, if the settings are invalid.
 try
 {
-    settings = SkySettings.Load(AppContext.BaseDirectory, "SKY_");
+    _ = app.Services.GetRequiredService<SkySettings>();
 }
 catch (SettingsException ex)
 {
     await Console.Error.WriteLineAsync(ex.Message).ConfigureAwait(false);
     return 1;
 }
-
-var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddSingleton(settings);
-builder.Services.AddSingleton<TimeProvider>(settings.ClockStartUtc is { } start ? new StartedClock(TimeProvider.System, start) : TimeProvider.System);
-builder.Services.AddSingleton(sp => new GpCache(
-    settings.CacheDirectory,
-    new CelesTrakClient(CelesTrakClient.CreateHttpClient()),
-    sp.GetRequiredService<TimeProvider>(),
-    settings.Offline));
-builder.Services.AddSingleton<SatelliteService>();
-builder.Services.AddProblemDetails();
-
-var app = builder.Build();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseDefaultFiles();
@@ -52,6 +55,7 @@ api.MapGet("/config", (SatelliteService service) =>
         s.MinimumElevationDegrees,
         s.Satellites,
         s.Offline,
+        s.ClockStartUtc is not null,
         SatelliteService.Utc(service.Now)));
 });
 

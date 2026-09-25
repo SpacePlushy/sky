@@ -103,7 +103,8 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
         LookAngles look = _observer.LookAt(ecef);
         Vec3 sun = Sun.PositionEcef(t);
         double sunElevation = _observer.LookAt(new EcefState(sun, default)).ElevationDegrees;
-        double footprint = Math.Acos(MeanEarthRadiusKm / (MeanEarthRadiusKm + Math.Max(subpoint.HeightKm, 0))) * RadiansToDegrees;
+        double footprint = FootprintRadiusDegrees(subpoint.HeightKm, 0.0);
+        double visibility = FootprintRadiusDegrees(subpoint.HeightKm, settings.MinimumElevationDegrees);
         double inertialSpeed = propagator.Propagate(t).State.Velocity.Length;
 
         // A zero-length window finds the pass the satellite is in now, if any: the finder follows a
@@ -119,6 +120,7 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             EarthShadow.IsSunlit(ecef.Position, sun),
             new SunDto(sunElevation, Math.Atan2(sun.Z, Math.Sqrt((sun.X * sun.X) + (sun.Y * sun.Y))) * RadiansToDegrees, Math.Atan2(sun.Y, sun.X) * RadiansToDegrees),
             footprint,
+            visibility,
             current is null ? null : Pass(current, propagator),
             warnings);
     }
@@ -144,8 +146,9 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
             step = (half * 2) / MaximumTrackPoints;
         }
 
+        // Sampled on whole milliseconds, so each point's values belong exactly to the time it reports.
         var points = new List<TrackPoint>();
-        for (DateTimeOffset s = t - half; s <= t + half; s += step)
+        for (DateTimeOffset s = Millisecond(t - half); s <= t + half; s += step)
         {
             PropagationResult result = propagator.Propagate(s);
             if (!result.Succeeded)
@@ -212,17 +215,41 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
 
     private PassDto Pass(SatellitePass pass, Sgp4Propagator propagator)
     {
-        var path = new List<SkyPoint>();
+        var windows = Visibility.Windows(pass, propagator, _observer);
+
+        // Every 10 s from rise, plus set and each visible part's ends exactly, so the sky plot can
+        // draw the visible part without interpolating.
+        // Sampled on the whole milliseconds the API reports, so each point's values belong exactly
+        // to its time.
+        var times = new SortedSet<DateTimeOffset> { Millisecond(pass.Set.Time) };
         for (DateTimeOffset s = pass.Rise.Time; s < pass.Set.Time; s += PathStep)
         {
-            path.Add(SkyPointAt(s, propagator));
+            times.Add(Millisecond(s));
         }
 
-        path.Add(SkyPointAt(pass.Set.Time, propagator));
-        var visible = Visibility.Windows(pass, propagator, _observer)
+        foreach (VisibleWindow w in windows)
+        {
+            times.Add(Millisecond(w.Start.Time));
+            times.Add(Millisecond(w.End.Time));
+        }
+
+        var path = times.Select(t => SkyPointAt(t, propagator)).ToList();
+        var visible = windows
             .Select(w => new VisibleDto(Event(w.Start), Change(w.StartsBecause), Event(w.Highest), Event(w.End), Change(w.EndsBecause)))
             .ToList();
         return new PassDto(Event(pass.Rise), Event(pass.Culmination), Event(pass.Set), pass.PeakElevationUncertaintyDegrees, visible, path);
+    }
+
+    /// <summary>
+    /// The Earth-central angle from the subpoint to where the satellite stands at a given elevation,
+    /// on a spherical Earth of mean radius: acos(R cos e / (R + h)) − e. For the map only; passes
+    /// come from the ellipsoidal core.
+    /// </summary>
+    internal static double FootprintRadiusDegrees(double heightKm, double elevationDegrees)
+    {
+        double e = elevationDegrees / RadiansToDegrees;
+        double ratio = MeanEarthRadiusKm * Math.Cos(e) / (MeanEarthRadiusKm + Math.Max(heightKm, 0));
+        return (Math.Acos(Math.Min(1.0, ratio)) - e) * RadiansToDegrees;
     }
 
     private SkyPoint SkyPointAt(DateTimeOffset t, Sgp4Propagator propagator)
@@ -304,6 +331,13 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, Time
         _ => throw new ArgumentOutOfRangeException(nameof(change)),
     };
 
-    /// <summary>An instant as a UTC DateTime, which JSON writes with a Z.</summary>
-    internal static DateTime Utc(DateTimeOffset instant) => instant.UtcDateTime;
+    /// <summary>An instant truncated to the millisecond.</summary>
+    private static DateTimeOffset Millisecond(DateTimeOffset t) => t.AddTicks(-(t.UtcTicks % TimeSpan.TicksPerMillisecond));
+
+    /// <summary>An instant as a UTC DateTime truncated to the millisecond, which JSON writes with a Z.</summary>
+    internal static DateTime Utc(DateTimeOffset instant)
+    {
+        DateTime utc = instant.UtcDateTime;
+        return new DateTime(utc.Ticks - (utc.Ticks % TimeSpan.TicksPerMillisecond), DateTimeKind.Utc);
+    }
 }
