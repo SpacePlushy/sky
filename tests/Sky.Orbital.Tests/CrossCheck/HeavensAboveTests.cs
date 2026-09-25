@@ -14,7 +14,7 @@ namespace Sky.Orbital.Tests.CrossCheck;
 /// <para>
 /// Asserted: every pass Heavens-Above lists is a pass Sky finds, and where Heavens-Above's start or
 /// end is a 10° crossing, Sky's rise or set is at most 1.5 s from it. Heavens-Above prints whole
-/// seconds, apparently truncated (Sky is 0.3 to 0.9 s later everywhere), so the bound is the 1 s of
+/// seconds, apparently truncated (Sky is 0.3 to 1.1 s later everywhere), so the bound is the 1 s of
 /// truncation plus 0.5 s for its own method. Its highest point, at a flat peak, gets the same bound
 /// and its printed whole degree.
 /// </para>

@@ -51,12 +51,27 @@ public class BrentTests
     }
 
     [Fact]
-    public void A_step_function_is_located_at_its_jump()
+    public void Step_functions_are_located_at_their_jump_to_the_documented_bound()
     {
-        // No interpolation can help with a jump; the guarantee is that the result is within the
-        // tolerance of where the sign changes.
-        var found = Brent.FindRoot(x => x < 0.7 ? -1.0 : 1.0, 0.0, 10.0, Tolerance);
-        Assert.InRange(found.X, 0.7 - Tolerance, 0.7 + Tolerance);
+        // No interpolation can help with a jump, so Brent falls back to bisection, where its bound is
+        // tight: a guarantee twice as loose as documented would fail here.
+        var random = new Random(3);
+        int nearBound = 0;
+        for (int i = 0; i < 2000; i++)
+        {
+            double jump = random.NextDouble() * 10;
+            double tolerance = Math.Pow(10, -1 - (random.NextDouble() * 4));
+            foreach (var (a, b) in new[] { (0.0, 10.0), (10.0, 0.0) })
+            {
+                var found = Brent.FindRoot(x => x < jump ? -1.0 : 1.0, a, b, tolerance);
+                double bound = tolerance + (4 * MachineEpsilon * Math.Abs(found.X));
+                Assert.InRange(found.X, jump - bound, jump + bound);
+                nearBound += Math.Abs(found.X - jump) > bound / 2 ? 1 : 0;
+            }
+        }
+
+        // The bound is approached, so the test has teeth.
+        Assert.True(nearBound > 100, $"Only {nearBound} results beyond half the bound.");
     }
 
     [Fact]

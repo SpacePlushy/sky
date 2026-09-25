@@ -186,13 +186,14 @@ public class VisibilityCrossCheckTests
         // Not a check of Sky's accuracy: Skyfield's is_sunlit models the Earth as a sphere. The
         // ellipsoid's surface lies between the polar and equatorial radii, so the models' shadow
         // functions differ by at most a − b = 21.4 km (times k), plus the difference in the Sun both
-        // use (under 0.017°). Each transition may move by that over the function's rate.
+        // use (under 0.0115°, plus 0.0057° because Skyfield's is_sunlit uses the geometric Sun). Each transition may move by that over the function's rate.
         Assert.Equal(Reference.Shadow.Count, Reference.SkyfieldSphereShadow.Count);
         foreach (var (sphere, ellipsoid) in Reference.SkyfieldSphereShadow.Zip(Reference.Shadow))
         {
             Assert.Equal(ellipsoid.Kind, sphere.Kind);
             double rate = ShadowRate(ellipsoid.Utc);
-            double bound = (((Wgs84.EquatorialRadius * Wgs84.Flattening * StretchFactor) + (StretchFactor * StretchFactor * Satellite(ellipsoid.Utc).Length * SunBoundRadians)) / rate) + 2e-6;
+            double sunDifference = SunBoundRadians + (0.0057 * Math.PI / 180.0);
+            double bound = (((Wgs84.EquatorialRadius * Wgs84.Flattening * StretchFactor) + (StretchFactor * StretchFactor * Satellite(ellipsoid.Utc).Length * sunDifference)) / rate) + 2e-6;
             Assert.True(Math.Abs((sphere.Utc - ellipsoid.Utc).TotalSeconds) <= bound, $"{ellipsoid.Utc:O}: sphere {sphere.Utc:O}, bound {bound} s.");
         }
     }

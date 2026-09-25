@@ -37,19 +37,39 @@ public class SunTests
     }
 
     [Fact]
+    public void Earth_fixed_rotation_is_meeus_example_12a_apparent_sidereal_time()
+    {
+        // Checks the equation of the equinoxes where PositionEcef uses it. The Earth-fixed Sun's
+        // longitude is its right ascension minus the rotation angle, so RA − longitude is the angle
+        // PositionEcef rotated by. Meeus 12.a gives apparent sidereal time 13h10m46.1351s at
+        // 1987-04-10 0h UT; Sky's one-term nutation is within 2.1″ = 0.14 s of it. Leaving the
+        // equation of the equinoxes out would be 0.23 s off, and flipping its sign 0.46 s.
+        var instant = new DateTimeOffset(1987, 4, 10, 0, 0, 0, TimeSpan.Zero);
+        SunPlace place = Sun.Apparent(JulianDate.FromInstant(instant));
+        Vec3 sun = Sun.PositionEcef(instant);
+        double longitude = Math.Atan2(sun.Y, sun.X) * 180.0 / Math.PI;
+        double rotationDegrees = ((place.RightAscensionDegrees - longitude) % 360.0 + 360.0) % 360.0;
+
+        Assert.Equal((13 * 3600) + (10 * 60) + 46.1351, rotationDegrees * 240.0, 0.14);
+    }
+
+    [Fact]
     public void Declination_and_distance_stay_within_their_physical_ranges()
     {
         // Seeded random instants, 1950 to 2050, the span Meeus's method is meant for. The Sun's
-        // declination never exceeds the obliquity (23.45° here, with nutation), and its distance
-        // stays between perihelion and aphelion, 0.9833 and 1.0167 AU.
+        // declination never exceeds the obliquity of date, the mean obliquity plus the 0.00256°
+        // nutation term, and its distance stays between perihelion and aphelion, 0.9833 and
+        // 1.0167 AU. A 0.01° error in the obliquity would fail the first check.
         var random = new Random(25);
         for (int i = 0; i < 5000; i++)
         {
-            double days = (random.NextDouble() * 36525 * 2) - 36525 - 18262.5; // 1950 to 2050
-            var jd = new JulianDate(2451544.5 + Math.Floor(days), days - Math.Floor(days));
+            double days = (random.NextDouble() * 36525) - 18262.5; // 1950 to 2050 about J2000
+            var jd = new JulianDate(2451544.5 + Math.Floor(days + 0.5), days + 0.5 - Math.Floor(days + 0.5));
             SunPlace place = Sun.Apparent(jd);
 
-            Assert.InRange(place.DeclinationDegrees, -23.46, 23.46);
+            double t = jd.DaysSinceJ2000 / 36525.0;
+            double obliquity = 23.0 + (26.0 / 60.0) + (21.448 / 3600.0) - (((46.8150 * t) + (0.00059 * t * t) - (0.001813 * t * t * t)) / 3600.0) + 0.00256;
+            Assert.InRange(Math.Abs(place.DeclinationDegrees), 0.0, obliquity + 1e-9);
             Assert.InRange(place.DistanceAu, 0.9832, 1.0168);
             Assert.InRange(place.RightAscensionDegrees, 0.0, 360.0);
             Assert.True(place.RightAscensionDegrees < 360.0);

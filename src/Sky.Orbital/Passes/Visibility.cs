@@ -77,7 +77,9 @@ public static class Visibility
     // 1 AU), rounded up.
     private const double LineTurnRadiansPerSecond = 7.35e-5;
     private const double SpeedAllowanceKmPerSecond = 0.1;
-    private const double SunElevationRateDegreesPerSecond = 0.0043;
+
+    /// <summary>An upper bound on how fast the Sun's elevation changes anywhere on the Earth, degrees per second.</summary>
+    internal const double SunElevationRateBoundDegreesPerSecond = 0.0043;
     private const double StretchFactor = 1.0 / (1.0 - Wgs84.Flattening);
 
     /// <summary>The visible parts of a pass, in time order. Empty if none of it can be seen.</summary>
@@ -98,16 +100,7 @@ public static class Visibility
 
         double Dark(double seconds) => TwilightSunElevationDegrees - SunElevationDegrees(observer, At(origin, seconds));
 
-        double ShadowRate(double seconds)
-        {
-            EcefState state = SatelliteEcef(propagator, At(origin, seconds));
-            double speed = state.Velocity.Length + SpeedAllowanceKmPerSecond;
-            double radius = state.Position.Length + (speed * Step.TotalSeconds);
-            // In the stretched space the satellite moves at most speed·k (k = 1/(1 − f)); the line's
-            // direction turns at most k times as fast as the true one; and the closest point is at
-            // most the stretched radius, k·r, along the line from the satellite.
-            return (speed * StretchFactor) + (LineTurnRadiansPerSecond * StretchFactor * radius * StretchFactor);
-        }
+        double ShadowRate(double seconds) => ShadowRateBound(SatelliteEcef(propagator, At(origin, seconds)));
 
         var changes = new List<(double Seconds, VisibilityChange Change)>();
         foreach (double root in SignChanges(Shadow, ShadowRate, length))
@@ -115,7 +108,7 @@ public static class Visibility
             changes.Add((root, Shadow(Math.Min(root + 0.01, length)) > 0 ? VisibilityChange.LeavesShadow : VisibilityChange.EntersShadow));
         }
 
-        foreach (double root in SignChanges(Dark, _ => SunElevationRateDegreesPerSecond, length))
+        foreach (double root in SignChanges(Dark, _ => SunElevationRateBoundDegreesPerSecond, length))
         {
             changes.Add((root, Dark(Math.Min(root + 0.01, length)) > 0 ? VisibilityChange.SkyDarkens : VisibilityChange.SkyBrightens));
         }
@@ -156,6 +149,20 @@ public static class Visibility
         return windows;
 
         bool IsVisible(double seconds) => Shadow(seconds) > 0 && Dark(seconds) > 0;
+    }
+
+    /// <summary>
+    /// An upper bound on how fast the shadow function can change over the 10 s after a satellite
+    /// state, km/s. In the stretched space the satellite moves at most its speed times k
+    /// (k = 1/(1 − f)); the line's direction turns at most k times as fast as the true one; and the
+    /// closest point is at most the stretched radius, k·r, along the line from the satellite. Speed
+    /// and radius get the allowances a 10 s step can need.
+    /// </summary>
+    internal static double ShadowRateBound(EcefState state)
+    {
+        double speed = state.Velocity.Length + SpeedAllowanceKmPerSecond;
+        double radius = state.Position.Length + (speed * Step.TotalSeconds);
+        return (speed * StretchFactor) + (LineTurnRadiansPerSecond * StretchFactor * radius * StretchFactor);
     }
 
     /// <summary>The Sun's geometric elevation at the observer, in degrees, including parallax.</summary>

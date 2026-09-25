@@ -21,7 +21,7 @@ public class EarthShadowTests
 
         // Beside the Earth, with the Sun 1 AU away rather than infinitely far, the line to it
         // leans toward the center by r² / 1 AU = 0.3 km along its length, so the function is the
-        // line's distance from the center, |s × sun| / |sun − s|, minus a: 7 µm under 400 km.
+        // line's distance from the center, |s × sun| / |sun − s|, minus a: r³/(2·AU²) ≈ 7 mm under 400 km.
         double r = A + 400;
         double lineDistance = r * SunOnX.X / Math.Sqrt((SunOnX.X * SunOnX.X) + (r * r));
         Assert.True(EarthShadow.IsSunlit(new Vec3(0, r, 0), SunOnX));
@@ -59,7 +59,7 @@ public class EarthShadowTests
     public void The_shadow_edge_over_a_pole_is_at_the_polar_radius_not_the_equatorial()
     {
         // A satellite behind the Earth, level with the pole, with the Sun so far away that its rays
-        // are parallel to x to 1e-13 rad: the line grazes the ellipsoid exactly at height z = b.
+        // are parallel to x to about 6×10⁻¹² rad (b / 10¹⁵ km), 2×10⁻⁸ km over 3,000 km: the line grazes the ellipsoid at height z = b.
         // A spherical Earth of radius a would put the edge 21.4 km higher.
         var farSun = new Vec3(1e15, 0, 0);
         Assert.False(EarthShadow.IsSunlit(new Vec3(-3000, 0, B - 0.001), farSun));
@@ -145,27 +145,54 @@ public class EarthShadowTests
         // In the stretched space the function is a distance from the center to a line (or to the
         // satellite), so moving the satellite by d changes it by at most |stretch(d)|, plus the
         // line's turn toward the Sun, which is |d| / 1 AU of the ~10,000 km lever: negligible.
-        // Pairs are drawn around the branch switch, where the line to the Sun is perpendicular to
-        // the satellite's position, as well as at random.
+        // Half the pairs are built exactly across the branch switch, where the stretched line to the
+        // Sun is perpendicular to the stretched position; the rest are random.
+        const double Au = 149_597_870.7;
+        const double K = 1.0 / (1.0 - Wgs84.Flattening);
         var random = new Random(14);
+        int straddling = 0;
         for (int i = 0; i < 5000; i++)
         {
             Vec3 sunDirection = RandomDirection(random);
-            Vec3 sun = sunDirection * 149_597_870.7;
-            Vec3 perpendicular = RandomDirection(random);
-            perpendicular -= sunDirection * perpendicular.Dot(sunDirection);
-            perpendicular *= 1.0 / perpendicular.Length;
+            Vec3 sun = sunDirection * Au;
             double r = A + 150 + (random.NextDouble() * 3000);
+            Vec3 s1;
+            if (i % 2 == 0)
+            {
+                // In the stretched space S = stretch(sun), U = S/|S|, P ⊥ U: along = 0 at s' = r·P + ε0·U,
+                // ε0 = (|S| − √(|S|² − 4r²)) / 2. Offset by up to 5 m either side, then unstretch.
+                var stretchedSun = new Vec3(sun.X, sun.Y, sun.Z * K);
+                double length = stretchedSun.Length;
+                Vec3 u = stretchedSun * (1.0 / length);
+                Vec3 p = RandomDirection(random);
+                p -= u * p.Dot(u);
+                p *= 1.0 / p.Length;
+                double epsilon0 = (length - Math.Sqrt((length * length) - (4 * r * r))) / 2;
+                Vec3 stretched = (p * r) + (u * (epsilon0 + ((random.NextDouble() - 0.5) * 0.01)));
+                s1 = new Vec3(stretched.X, stretched.Y, stretched.Z / K);
+            }
+            else
+            {
+                s1 = RandomDirection(random) * r;
+            }
 
-            Vec3 s1 = i % 2 == 0
-                ? (perpendicular * r) + (sunDirection * ((random.NextDouble() - 0.5) * 2.0)) // straddles the switch
-                : RandomDirection(random) * r;
             Vec3 d = RandomDirection(random) * (random.NextDouble() * 0.01);
             Vec3 s2 = s1 + d;
+            straddling += Along(s1, sun) * Along(s2, sun) < 0 ? 1 : 0;
 
             double change = Math.Abs(EarthShadow.Function(s1, sun) - EarthShadow.Function(s2, sun));
-            double stretched = new Vec3(d.X, d.Y, d.Z / (1.0 - Wgs84.Flattening)).Length;
-            Assert.True(change <= (stretched * (1 + 1e-6)) + 1e-9, $"changed {change} km for a {stretched} km move");
+            double stretchedMove = new Vec3(d.X, d.Y, d.Z * K).Length;
+            Assert.True(change <= (stretchedMove * (1 + 1e-6)) + 1e-9, $"changed {change} km for a {stretchedMove} km move");
+        }
+
+        // Many pairs really do sit on opposite branches.
+        Assert.True(straddling > 500, $"Only {straddling} pairs straddle the branch switch.");
+
+        static double Along(Vec3 satellite, Vec3 sun)
+        {
+            var s = new Vec3(satellite.X, satellite.Y, satellite.Z * K);
+            var toSun = new Vec3(sun.X - satellite.X, sun.Y - satellite.Y, (sun.Z - satellite.Z) * K);
+            return -s.Dot(toSun * (1.0 / toSun.Length));
         }
     }
 

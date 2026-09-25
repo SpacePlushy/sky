@@ -103,6 +103,89 @@ public class VisibilityTests
         }
     }
 
+    [Theory]
+    [InlineData("iss")]
+    [InlineData("molniya")]
+    [InlineData("geo")]
+    public void The_shadow_rate_bound_holds_over_every_10_second_step(string orbit)
+    {
+        // The bound decides where a hidden crossing between samples is possible, so it must hold:
+        // over each 10 s step, the shadow function's actual rate (central differences, every
+        // second) must not exceed the bound computed from the state at the step's start.
+        var (propagator, start, hours) = orbit switch
+        {
+            "iss" => (Iss, WindowStart, 24.0),
+            "molniya" => (Sgp4Propagator.Create(Sky.Orbital.Elements.Tle.Parse(
+                "1 08195U 75081A   06176.33215444  .00000099  00000-0  11873-3 0   813",
+                "2 08195  64.1586 279.0717 6877146 264.7651  20.2257  2.00491383225656")), new DateTimeOffset(2006, 6, 25, 8, 0, 0, TimeSpan.Zero), 24.0),
+            _ => (Sgp4Propagator.Create(Sky.Orbital.Elements.Tle.Parse(
+                "1 28626U 05008A   06176.46683397 -.00000205  00000-0  10000-3 0  2190",
+                "2 28626   0.0019 286.9433 0000335  13.7918  55.6504  1.00270176  4891")), new DateTimeOffset(2006, 6, 25, 12, 0, 0, TimeSpan.Zero), 24.0),
+        };
+
+        double Shadow(DateTimeOffset t) => EarthShadow.Function(Ecef(propagator, t).Position, Sun.PositionEcef(t));
+        double worst = 0;
+        for (var stepStart = start; stepStart < start.AddHours(hours); stepStart = stepStart.AddSeconds(10))
+        {
+            double bound = Visibility.ShadowRateBound(Ecef(propagator, stepStart));
+            for (int k = 0; k <= 10; k++)
+            {
+                var t = stepStart.AddSeconds(k);
+                double rate = Math.Abs(Shadow(t.AddSeconds(0.5)) - Shadow(t.AddSeconds(-0.5)));
+                worst = Math.Max(worst, rate / bound);
+                Assert.True(rate <= bound, $"{orbit} at {t:O}: {rate} km/s against a bound of {bound}.");
+            }
+        }
+
+        // The bound is not vacuous: the ISS's actual rate comes within a factor of 2 of it.
+        if (orbit == "iss")
+        {
+            Assert.True(worst > 0.5, $"Worst ratio {worst}.");
+        }
+    }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(33.4478)]
+    [InlineData(66.0)]
+    [InlineData(-89.0)]
+    public void The_sun_elevation_rate_bound_holds_everywhere_through_the_year(double latitude)
+    {
+        var observer = new TopocentricFrame(new Geodetic(latitude, -112.0972, 0.0));
+        for (var t = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero); t.Year == 2026; t = t.AddMinutes(37))
+        {
+            double rate = Math.Abs(Visibility.SunElevationDegrees(observer, t.AddSeconds(5)) - Visibility.SunElevationDegrees(observer, t.AddSeconds(-5))) / 10.0;
+            Assert.True(rate <= Visibility.SunElevationRateBoundDegreesPerSecond, $"{latitude}° at {t:O}: {rate} deg/s.");
+        }
+    }
+
+    [Fact]
+    public void Dawn_windows_start_when_the_satellite_leaves_shadow_and_end_when_the_sky_brightens()
+    {
+        // The week's evening passes never reach these two causes, so build 90-minute stretches
+        // across dawn in Phoenix (civil twilight begins about 12:53 UTC), where the ISS comes out of
+        // the Earth's shadow into a still-dark sky.
+        var starts = new List<VisibilityChange>();
+        var ends = new List<VisibilityChange>();
+        foreach (int day in new[] { 24, 25, 26, 27, 28, 29, 30 })
+        {
+            var t0 = new DateTimeOffset(2026, 9, day, 11, 40, 0, TimeSpan.Zero);
+            var span = new SatellitePass(new PassEvent(t0, 0, 0), new PassEvent(t0.AddMinutes(45), 0, 0), new PassEvent(t0.AddMinutes(90), 0, 0), 0);
+            foreach (var w in Visibility.Windows(span, Iss, Phoenix))
+            {
+                CheckBoundary(w.Start, w.StartsBecause, span);
+                CheckBoundary(w.End, w.EndsBecause, span);
+                starts.Add(w.StartsBecause);
+                ends.Add(w.EndsBecause);
+            }
+        }
+
+        Assert.Contains(VisibilityChange.LeavesShadow, starts);
+        Assert.Contains(VisibilityChange.SkyBrightens, ends);
+    }
+
+    private static EcefState Ecef(Sgp4Propagator propagator, DateTimeOffset t) => EarthRotation.TemeToEcef(propagator.Propagate(t).State, t);
+
     [Fact]
     public void Sun_elevation_is_the_look_angle_of_the_suns_earth_fixed_position()
     {
