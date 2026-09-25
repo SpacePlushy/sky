@@ -90,12 +90,13 @@ as Terrestrial Time: 0.0115°.
 | Apparent right ascension, declination, distance | Meeus Example 25.a (published) | 10⁻⁵° and 10⁻⁵ AU, the printed digits | Within |
 | Mean sidereal time, 1987 April 10 0h UT | Meeus Example 12.a: 13h10m46.3668s | 10⁻⁴ s | Within |
 | Apparent sidereal time, same date | Meeus Example 12.a with full nutation: 13h10m46.1351s | 0.14 s, the omitted nutation terms | Within |
+| The rotation `PositionEcef` applies, same date | The same published apparent sidereal time | 0.14 s: a missing equation of the equinoxes is 0.23 s off, a flipped one 0.46 s | Within |
 | Apparent place, 400 instants 1950 to 2049, at the same Terrestrial Time | DE421 | 0.010° | 0.0092° |
 | Distance, same instants | DE421 | 10⁻⁴ AU | 7.5×10⁻⁵ AU |
 | Equation of the equinoxes, same instants | Skyfield's GAST − GMST (IAU 2000A) | 2.1″ | Within |
 | Earth-fixed direction, every 10 min for 7 days | DE421 | 0.0115° | 0.0028° |
 | Elevation at the observer, same instants | DE421, apparent, no refraction | 0.0115° | 0.0026° |
-| Declination within the obliquity, distance between perihelion and aphelion | 5,000 random instants, 1950 to 2050 | Physical ranges | Within |
+| Declination within the obliquity of date, distance between perihelion and aphelion | 5,000 random instants, 1950 to 2050 | Physical ranges | Within |
 | Subsolar longitude at 12:00 UTC | The equation of time, ±16.5 min | ±4.2° every day of 2026 | Within |
 
 ### The Earth's shadow (Milestone 2)
@@ -113,7 +114,7 @@ the same geometry by a different method, a line-ellipsoid quadratic, with DE421'
 | Sunlit or not | A brute-force 0.5 km march toward the Sun, 600 cases | Identical | Identical |
 | Continuity where the function's two branches meet | 5,000 pairs | Lipschitz in the stretched space | Within |
 | Sky's function at the reference's 217 transitions, given the reference Sun | Line-ellipsoid quadratic, bisected to 1 µs | 2×10⁻⁵ km, and the right sign change | 2.1×10⁻⁶ km |
-| Transitions with Sky's own Sun, 7 days | Same | Per transition: 0.0115° of Sun direction over the function's rate there, plus 1 ms: 0.76 to 1.06 s | 16 ms (median 10 ms) |
+| Transitions with Sky's own Sun, 7 days | Same | Per transition: 0.0115° of Sun direction over the function's rate there, plus 1 ms: 0.52 to 0.72 s | 16 ms (median 10 ms) |
 | Skyfield's `is_sunlit` | A sphere and the geometric Sun | The models' difference over the rate | Up to 8.0 s apart |
 
 The last row is not a check of Sky: Skyfield's sphere puts high-latitude shadow edges up to 21 km
@@ -143,11 +144,12 @@ ISS pass.
 | Grazing passes: minimum 0.02°, 0.05°, and 0.2° below each of the 25 peaks | Every pass found; rise and set on the minimum within 1.1×10⁻³°; peak within 10 ms | All 75 |
 | A 6 s dip below the minimum between two samples of a Molniya pass | Split into two passes, each ending on the minimum | Split; the test fails with the check disabled |
 | Molniya pass with maxima of 79.4° and 85.1° | The higher maximum, at least as high as a brute-force 0.1 s sweep | Same maximum |
-| A search starting inside a pass (3 passes, 3 points each) | Same rise, peak, and set as a search starting before it, within 2 ms | Within |
+| A search starting inside a pass (3 passes, 3 points each) | Same rise and set as a search starting before it within 2 ms, peak within 0.3 ms | Within |
+| A pass longer than a day (a drifting geostationary satellite) whose set, or rise, is 5 to 25 s from the window's edge | Not reported as up at the start (or end); the end that lies within reach is reported, within 1 ms | Within; both tests fail with the fix removed |
 | A geostationary satellite | No passes; reported as up for the whole extension | As bounded |
 | A decaying satellite | Search stops and reports the SGP4 error | Reports `Decayed` |
 | 40 random observers and minimums | Rise < peak < set, crossings on the minimum, no overlaps | All |
-| Heavens-Above, same element set, 9 visible passes | Rise, set, and peak within 1.5 s (it prints truncated whole seconds) | 0.3 to 0.9 s; peaks 1.1 s |
+| Heavens-Above, same element set, 9 visible passes | Rise, set, and peak within 1.5 s (it prints truncated whole seconds) | Rise 0.3 to 1.1 s, set 0.7 to 0.8 s, peaks 0.5 to 1.1 s |
 
 Printed times round to the nearest second.
 
@@ -162,10 +164,12 @@ each function catches a crossing and return between samples.
 | Every second of every pass for 7 days | Sky's Sun and shadow functions, evaluated directly | Inside a window exactly when both conditions hold | Exact |
 | Each window boundary | The function that caused it | Changes sign within ±2 ms | All |
 | Hidden crossings between samples | Functions with known roots | Found to 1 ms | All |
-| Civil twilight, 14 crossings in 7 days | DE421 | Per crossing: 0.0115° over the Sun's elevation rate, 4.9 s or more | 0.74 s |
+| Civil twilight, 14 crossings in 7 days | DE421 | Per crossing: 0.0115° over the Sun's elevation rate, 3.31 s | 0.74 s |
 | Civil twilight, 8 crossings on 4 dates across 2026 | U.S. Naval Observatory, published to the minute | 30 s of rounding plus the Sun bound | All 8 round to USNO's minute |
 | Visible parts of the 25 reference passes, 7 visible | Reference windows from DE421 and the quadratic shadow | Each boundary within the bound of its cause | 0.12 s; highest point 0.039° |
 | Heavens-Above, same element set | Its visible-pass table | Recorded | Ends 2.0 to 4.6 s earlier at shadow entry; counts twilight passes visible sooner |
+| Rate bounds for hidden crossings | Central-difference rates every second over a day of the ISS, a Molniya, and a geostationary orbit; the Sun at four latitudes through 2026 | Never above the bound | The ISS comes within a factor of 2 of its bound |
+| Dawn passes: leaving shadow into a dark sky, and twilight ending a window | 90-minute spans across dawn on 7 days | Each boundary's function changes sign within ±2 ms | All |
 
 Heavens-Above's earlier shadow ends match a fade through the penumbra, where Sky uses the Sun's
 center (assumption A11). Its twilight rule, which judges visibility from sky brightness and the
@@ -191,7 +195,7 @@ The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 | Relative `CelesTrak:CacheDirectory` | Resolves against the settings folder, never the working directory, so every run shares one request history and one 2-hour rule |
 | `--min-elevation` | Parsed with the invariant culture: `30.5` means the same under a German locale, and `1,5`, `NaN`, and values outside 0 to below 90 are errors |
 | Daylight-saving zones | When the offset changes inside the window, every printed time carries its UTC offset; checked in `America/Denver` across the November change |
-| Search start | A clock at 04:00:02.332 gives rises on the 04:00:02 grid |
+| Fractional clock | A clock at 05:00:02.332 does not shift printed times: rise, peak, and set are root-found and printed to the nearest second, each within 0.5 s of Skyfield over 5 passes (the first rise, 05:32:22.132 UTC, prints as 22:32:22 Phoenix time) |
 | Cache wiring | `--refresh` and `sky unblock` checked end to end against the fake server |
 
 ## Assumptions
@@ -205,8 +209,8 @@ The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 | A5 | UT1 is taken as UTC. | IERS Bulletin A (24 Sep 2026) gives UT1 − UTC = −0.0135 s, about 7 m at ISS radius. By definition it never exceeds 0.9 s, about 450 m. | Per-sample bound against Skyfield |
 | A6 | Geodetic output uses WGS-84. | This is the GPS and mapping standard. | Definitional and round-trip tests |
 | A7 | Observer height is ellipsoid height. | Phoenix's geoid is about 30 m below the ellipsoid: under 0.004° of elevation. | Documented in settings |
-| A8 | Elevation is geometric, with no refraction. | Refraction lifts objects about 0.5° at the horizon and 0.1° at 10°. | Documented in CLI output. Heavens-Above's 10° crossings agree with Sky's geometric ones within 1 s. |
-| A9 | The Sun comes from Meeus's low-accuracy method with a one-term nutation. | Under 0.0115° of direction: under 1.1 s on an ISS shadow transition, and 0.0115° over the Sun's elevation rate on a twilight crossing (about 3 to 6 s in Phoenix). | DE421, Meeus Examples 25.a and 12.a, USNO |
+| A8 | Elevation is geometric, with no refraction. | Refraction lifts objects about 0.5° at the horizon and 0.1° at 10°. | Documented in CLI output. Heavens-Above's 10° crossings agree with Sky's geometric ones within 1.1 s. |
+| A9 | The Sun comes from Meeus's low-accuracy method with a one-term nutation. | Under 0.0115° of direction: under 0.72 s on an ISS shadow transition in the reference week, and 0.0115° over the Sun's elevation rate on a twilight crossing (3.3 s at the equinoxes to 4.0 s at the solstices in Phoenix). | DE421, Meeus Examples 25.a and 12.a, USNO |
 | A10 | UTC is used as Terrestrial Time in the Sun formulas. | 0.0008°, inside A9's bound. | Part of A9's bound |
 | A11 | The shadow is geometric: the Sun's center, the WGS-84 ellipsoid, no atmosphere. | The Sun's disk makes the ISS fade over about 8 s when its orbit crosses the shadow squarely, several times longer at a high beta angle; Sky reports the middle. Atmospheric dimming moves the fade by seconds. | Heavens-Above ends passes 2.0 to 4.6 s earlier; Skyfield's sphere is reported beside the ellipsoid |
 | A12 | The sky is dark enough when the Sun's center is geometrically 6° below the horizon. | The standard definition of civil twilight. | USNO uses the same definition |
