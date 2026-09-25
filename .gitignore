@@ -34,3 +34,6 @@ __pycache__/
 
 # Skyfield ephemeris download (tools/reference)
 tools/reference/.cache/
+
+# Built dashboard copied into the API for publishing
+src/Sky.Api/wwwroot/

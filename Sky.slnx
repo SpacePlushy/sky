@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Sky.Api/Sky.Api.csproj" />
     <Project Path="src/Sky.CelesTrak/Sky.CelesTrak.csproj" />
     <Project Path="src/Sky.Cli/Sky.Cli.csproj" />
     <Project Path="src/Sky.Orbital/Sky.Orbital.csproj" />
@@ -7,6 +8,7 @@
     <Project Path="src/Sky.Sgp4/Sky.Sgp4.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Sky.Api.Tests/Sky.Api.Tests.csproj" />
     <Project Path="tests/Sky.CelesTrak.Tests/Sky.CelesTrak.Tests.csproj" />
     <Project Path="tests/Sky.Cli.Tests/Sky.Cli.Tests.csproj" />
     <Project Path="tests/Sky.Orbital.Tests/Sky.Orbital.Tests.csproj" />

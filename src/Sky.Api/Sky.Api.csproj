@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>Sky.Api</RootNamespace>
+    <!-- The API reads the same settings files as the CLI, so there is one set of defaults. -->
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sky.Orbital\Sky.Orbital.csproj" />
+    <ProjectReference Include="..\Sky.CelesTrak\Sky.CelesTrak.csproj" />
+    <ProjectReference Include="..\Sky.Settings\Sky.Settings.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\Sky.Cli\appsettings.json" Link="appsettings.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Your real location, if you have made one for the CLI. Gitignored; never published into an image. -->
+    <Content Include="..\Sky.Cli\appsettings.Local.json" Link="appsettings.Local.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" Condition="Exists('..\Sky.Cli\appsettings.Local.json')" />
+    <!-- The built dashboard, when present (the Docker build puts it here). -->
+    <Content Include="wwwroot\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sky.Api.Tests" />
+  </ItemGroup>
+
+</Project>
