@@ -10,3 +10,6 @@ tests/Sky.Orbital.Tests/Data/Vallado/* -text
 
 # Recorded CelesTrak responses keep their exact bytes (CelesTrak sends CRLF).
 tests/Sky.CelesTrak.Tests/Fixtures/*.json -text
+
+# The Docker demo cache is a byte-for-byte copy of the recorded stations response.
+deploy/demo-cache/*.json -text
