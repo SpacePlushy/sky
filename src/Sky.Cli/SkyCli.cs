@@ -79,8 +79,8 @@ internal static class SkyCli
         Geodetic subpoint = Wgs84.FromEcef(ecef.Position);
         var frame = new TopocentricFrame(settings.Observer);
         LookAngles look = frame.LookAt(ecef);
-        IReadOnlyList<SatellitePass> upcoming = CoarsePassFinder.Find(propagator, frame, t, t.AddDays(7), settings.MinimumElevationDegrees);
-        SatellitePass? next = upcoming.Count > 0 ? upcoming[0] : null;
+        PassSearchResult upcoming = CoarsePassFinder.Find(propagator, frame, t, t.AddDays(7), settings.MinimumElevationDegrees);
+        SatellitePass? next = upcoming.Passes.Count > 0 ? upcoming.Passes[0] : null;
 
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}").ConfigureAwait(false);
@@ -95,9 +95,22 @@ internal static class SkyCli
         await o.WriteLineAsync($"  elevation   {Format.Number(look.ElevationDegrees, 2)}°{(look.ElevationDegrees < 0 ? " (below the horizon)" : string.Empty)}").ConfigureAwait(false);
         await o.WriteLineAsync($"  range       {Format.Number(look.RangeKm, 2)} km").ConfigureAwait(false);
         await o.WriteLineAsync($"  range rate  {Format.Number(look.RangeRateKmPerSecond, 3)} km/s").ConfigureAwait(false);
-        await o.WriteLineAsync(next is null
-            ? $"  next pass   none above {Format.Number(settings.MinimumElevationDegrees, 0)}° in the next 7 days"
-            : $"  next pass   rises {Format.LocalTime(next.Rise.Time, settings.TimeZone)} ({Format.Countdown(next.Rise.Time - t)}), peaks at {Format.Number(next.Culmination.ElevationDegrees, 1)}°").ConfigureAwait(false);
+        if (look.ElevationDegrees >= settings.MinimumElevationDegrees)
+        {
+            // The pass finder only reports passes that rise inside its window, so say so directly.
+            await o.WriteLineAsync($"  pass        in progress now, above {Format.Number(settings.MinimumElevationDegrees, 0)}°").ConfigureAwait(false);
+        }
+        else if (next is not null)
+        {
+            await o.WriteLineAsync($"  next pass   rises {Format.LocalTime(next.Rise.Time, settings.TimeZone)} ({Format.Countdown(next.Rise.Time - t)}), peaks at {Format.Number(next.Culmination.ElevationDegrees, 1)}°").ConfigureAwait(false);
+        }
+        else
+        {
+            await o.WriteLineAsync(Format.SearchStop(upcoming, settings.TimeZone) is { } stop
+                ? $"  next pass   none found: {stop}"
+                : $"  next pass   none above {Format.Number(settings.MinimumElevationDegrees, 0)}° in the next 7 days").ConfigureAwait(false);
+        }
+
         return 0;
     }
 
@@ -119,13 +132,14 @@ internal static class SkyCli
 
         double minimum = minimumElevation ?? settings.MinimumElevationDegrees;
         DateTimeOffset t = env.Time.GetUtcNow();
-        var found = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), t, t.AddDays(days), minimum).Take(count).ToList();
+        PassSearchResult search = CoarsePassFinder.Find(propagator, new TopocentricFrame(settings.Observer), t, t.AddDays(days), minimum);
+        var found = search.Passes.Take(count).ToList();
         TimeZoneInfo zone = settings.TimeZone;
 
         TextWriter o = env.Out;
         await o.WriteLineAsync($"{record.Name}  NORAD {catalogNumber}, elements from {Format.Utc(record.Elements.Epoch)} UTC ({Format.Number((t - record.Elements.Epoch).TotalDays, 1)} days old)").ConfigureAwait(false);
-        await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Number(minimum, 0)}° in the next {days} days. Times in {zone.Id} ({Format.Offset(t, zone)}).").ConfigureAwait(false);
-        await o.WriteLineAsync("Coarse (Milestone 1): times within 10 s, peak elevation within 0.6°. Geometric elevation, no refraction.").ConfigureAwait(false);
+        await o.WriteLineAsync($"Passes over {settings.ObserverName} above {Format.Number(minimum, 0)}° in the next {days} days. Times in {zone.Id} ({Format.OffsetLabel(zone, t, t.AddDays(days))}).").ConfigureAwait(false);
+        await o.WriteLineAsync("Milestone 1 accuracy: rise and set within 10 s; peak within 0.1 s and 0.06°. Geometric elevation, no refraction. A pass already in progress is not listed.").ConfigureAwait(false);
         await o.WriteLineAsync().ConfigureAwait(false);
         await o.WriteLineAsync("  Rise                 Az       Peak      El      Az       Set       Az").ConfigureAwait(false);
         foreach (SatellitePass pass in found)
@@ -138,7 +152,9 @@ internal static class SkyCli
 
         if (found.Count < count)
         {
-            await o.WriteLineAsync($"  Only {found.Count} of {count} passes found in the next {days} days.").ConfigureAwait(false);
+            await o.WriteLineAsync(Format.SearchStop(search, zone) is { } stop
+                ? $"  Only {found.Count} of {count} passes found. {stop}"
+                : $"  Only {found.Count} of {count} passes found in the next {days} days.").ConfigureAwait(false);
         }
 
         return 0;
@@ -163,6 +179,12 @@ internal static class SkyCli
             GpRecord? match = result.Records.Where(r => r.Elements.CatalogNumber == catalogNumber).MaxBy(r => r.Elements.Epoch);
             if (match is not null)
             {
+                TimeSpan age = env.Time.GetUtcNow() - match.Elements.Epoch;
+                if (age > TimeSpan.FromDays(3))
+                {
+                    await env.Error.WriteLineAsync($"warning: {match.Name} elements are {Format.Number(age.TotalDays, 1)} days old; predictions degrade by kilometers per day of element age.").ConfigureAwait(false);
+                }
+
                 return match;
             }
         }

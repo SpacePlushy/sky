@@ -29,18 +29,18 @@ public sealed partial class CommandTests : IDisposable
         Assert.Contains("ISS (ZARYA)", output, StringComparison.Ordinal);
         Assert.Contains("America/Phoenix", output, StringComparison.Ordinal);
 
-        var rises = PassRow().Matches(output).Select(m => DateTimeOffset.ParseExact(
-            m.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal)).ToList();
+        var rises = PassRow().Matches(output).Select(m => DateTime.ParseExact(
+            m.Groups["rise"].Value, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).ToList();
         Assert.Equal(5, rises.Count);
 
-        // Printed times are Phoenix local (UTC-7). Each rise must be within the coarse finder's
-        // bound of Skyfield's: up to 10 s after the true crossing, plus 1 s for printing whole seconds.
+        // Printed times are Phoenix local. Rises fall on the 10 s grid from the clock time (whole
+        // seconds), so each printed rise is 0 to 10 s after Skyfield's refined crossing.
         var reference = Skyfield.GetProperty("passes").EnumerateArray().Take(5).ToList();
         foreach (var (printedLocal, pass) in rises.Zip(reference))
         {
-            var printedUtc = printedLocal + TimeSpan.FromHours(7);
+            var printedUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(printedLocal, Phoenix), TimeSpan.Zero);
             var skyfieldRise = pass.GetProperty("rise").GetProperty("utc").GetDateTimeOffset();
-            Assert.InRange((printedUtc - skyfieldRise).TotalSeconds, -1.0, 11.0);
+            Assert.InRange((printedUtc - skyfieldRise).TotalSeconds, -0.001, 10.001);
         }
     }
 
@@ -75,6 +75,38 @@ public sealed partial class CommandTests : IDisposable
         Assert.Equal(Number(look.GetProperty("elevation_deg")), Printed(output, "elevation"), 0.005 + angleBound);
         Assert.Equal(rangeKm, Printed(output, "range"), 0.005 + shiftKm);
         Assert.Contains("2026-09-23 21:00:00", output, StringComparison.Ordinal); // 04:00 UTC in Phoenix
+    }
+
+    [Fact]
+    public async Task Passes_states_the_finders_bounds()
+    {
+        await _cli.RunAsync("passes");
+
+        Assert.Contains("rise and set within 10 s; peak within 0.1 s and 0.06°", _cli.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Now_during_a_pass_says_the_pass_is_in_progress()
+    {
+        // Set the clock to the peak of Skyfield's first pass.
+        var peak = Skyfield.GetProperty("passes")[0].GetProperty("culmination").GetProperty("utc").GetDateTimeOffset();
+        _cli.Clock.SetUtcNow(peak);
+
+        int exit = await _cli.RunAsync("now");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("in progress now", _cli.Out.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Now_warns_when_the_satellites_elements_are_more_than_3_days_old()
+    {
+        _cli.Clock.SetUtcNow(new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero)); // ISS epoch is 2026-09-24 03:24
+
+        int exit = await _cli.RunAsync("now");
+
+        Assert.Equal(0, exit);
+        Assert.Contains("ISS (ZARYA) elements are 4.4 days old", _cli.Error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
