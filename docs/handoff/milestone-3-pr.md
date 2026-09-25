@@ -12,7 +12,7 @@ Milestone 3 of Sky Over Phoenix: the dashboard. The plan, and the multi-agent pl
 
 | Check | Result |
 |---|---|
-| .NET tests | 374, all passing, offline |
+| .NET tests | 376, all passing, offline |
 | Dashboard unit tests (Vitest) | 134, all passing; six deliberately introduced bugs were each caught |
 | `/now` against Skyfield | Within Milestone 1's pipeline bounds |
 | `/passes`, `/track`, sky paths | Equal to the orbital core, value for value |
@@ -27,7 +27,7 @@ Milestone 3 of Sky Over Phoenix: the dashboard. The plan, and the multi-agent pl
 
 ## Test plan
 
-- [x] `dotnet test --solution Sky.slnx`: 374 passed
+- [x] `dotnet test --solution Sky.slnx`: 376 passed
 - [x] `dotnet format Sky.slnx --verify-no-changes`: clean
 - [x] `npm run typecheck`, `lint`, `test`, `build` in `web/`: clean, 134 passed
 - [x] CI green: build and test on ubuntu, macOS, and Windows; web; Docker
