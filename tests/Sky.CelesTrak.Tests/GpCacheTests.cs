@@ -235,25 +235,52 @@ public sealed class GpCacheTests : IDisposable
     }
 
     [Fact]
-    public async Task An_unreadable_state_file_falls_back_to_its_modification_time()
+    public async Task An_unreadable_state_file_blocks_the_group_until_a_person_clears_it()
     {
-        // Fail safe: without readable state, the last request is taken to be when the state file
-        // was last written, so the 2-hour rule still holds, and the problem is reported.
+        // The unreadable file might have recorded a block (a CelesTrak error that needs a person),
+        // so the safe reading is "blocked".
+        await WriteUnreadableStateAsync(writtenAt: Start - TimeSpan.FromHours(1));
+
+        var blocked = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromDays(2));
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken, forceRefresh: true);
+
+        Assert.Empty(_server.Requests);
+        Assert.Contains(blocked.Warnings, w => w.Contains("state", StringComparison.OrdinalIgnoreCase));
+
+        _server.Respond(HttpStatusCode.OK, Stations);
+        var cache = NewCache();
+        cache.ClearBlock("stations");
+        var recovered = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests);
+        Assert.Equal(GpDataSource.Downloaded, recovered.Source);
+    }
+
+    [Fact]
+    public async Task After_clearing_an_unreadable_state_the_2_hour_rule_counts_from_its_last_write()
+    {
+        // The state file is rewritten on every attempt, so its modification time is no earlier than
+        // the last request.
+        await WriteUnreadableStateAsync(writtenAt: Start - TimeSpan.FromMinutes(30));
+        var cache = NewCache();
+        cache.ClearBlock("stations");
+
+        await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Empty(_server.Requests);
+
+        _server.Respond(HttpStatusCode.OK, Stations);
+        _clock.Advance(TimeSpan.FromMinutes(90));
+        var allowed = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests);
+        Assert.Equal(GpDataSource.Downloaded, allowed.Source);
+    }
+
+    private async Task WriteUnreadableStateAsync(DateTimeOffset writtenAt)
+    {
         Directory.CreateDirectory(_directory);
         string statePath = Path.Combine(_directory, "stations.state.json");
         await File.WriteAllTextAsync(statePath, "{ not json", TestContext.Current.CancellationToken);
-        File.SetLastWriteTimeUtc(statePath, (Start - TimeSpan.FromHours(1)).UtcDateTime);
-
-        var tooSoon = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
-
-        Assert.Empty(_server.Requests);
-        Assert.Contains(tooSoon.Warnings, w => w.Contains("state", StringComparison.OrdinalIgnoreCase));
-
-        _server.Respond(HttpStatusCode.OK, Stations);
-        _clock.Advance(TimeSpan.FromHours(1));
-        var recovered = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
-        Assert.Single(_server.Requests);
-        Assert.Equal(GpDataSource.Downloaded, recovered.Source);
+        File.SetLastWriteTimeUtc(statePath, writtenAt.UtcDateTime);
     }
 
     [Fact]

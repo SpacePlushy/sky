@@ -210,12 +210,18 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         }
         catch (JsonException ex)
         {
-            // Fail safe: the state file is rewritten on every attempt, so its modification time is
-            // no earlier than the last request. Treating that as the last attempt keeps the 2-hour
-            // rule; the next attempt rewrites the file.
+            // Fail safe on both rules. The unreadable file might have recorded a block, which only
+            // a person may clear, so the group is treated as blocked. And the file is rewritten on
+            // every attempt, so its modification time is no earlier than the last request, which
+            // keeps the 2-hour rule once the block is cleared.
             DateTimeOffset written = new(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
-            warnings.Add($"The request state for GROUP={group} could not be read ({ex.Message}); treating {Format(written)}, when it was last written, as the last request.");
-            return new State { LastAttemptUtc = written };
+            string problem = $"The request state for GROUP={group} could not be read ({ex.Message}), so any earlier CelesTrak error it recorded is unknown.";
+            warnings.Add(problem);
+            return new State
+            {
+                LastAttemptUtc = written,
+                Blocked = new BlockRecord(0, string.Empty, problem, written),
+            };
         }
     }
 
@@ -245,8 +251,10 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     private static string BlockedMessage(string group, BlockRecord blocked)
     {
         string problem = blocked.Problem is null ? string.Empty : $" {blocked.Problem}";
-        return $"CelesTrak answered HTTP {blocked.Status} for GROUP={group} at {Format(blocked.AtUtc)}: \"{blocked.Body}\".{problem} " +
-            "Sky has stopped requesting this group, as CelesTrak's usage policy requires, and is using cached data if it has any. " +
+        string cause = blocked.Status == 0
+            ? $"GROUP={group} is blocked:{problem}"
+            : $"CelesTrak answered HTTP {blocked.Status} for GROUP={group} at {Format(blocked.AtUtc)}: \"{blocked.Body}\".{problem}";
+        return cause + " Sky has stopped requesting this group, as CelesTrak's usage policy requires, and is using cached data if it has any. " +
             "Clear the block after checking CelesTrak's status to try again.";
     }
 
@@ -274,6 +282,6 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         public BlockRecord? Blocked { get; init; }
     }
 
-    /// <summary>The CelesTrak answer that blocked a group.</summary>
+    /// <summary>Why a group is blocked: a CelesTrak answer, or status 0 for unreadable local state.</summary>
     private sealed record BlockRecord(int Status, string Body, string? Problem, DateTimeOffset AtUtc);
 }
