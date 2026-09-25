@@ -7,3 +7,6 @@ src/Sky.Sgp4/SGP4Lib.cs -text
 
 # Reference data files keep their published bytes so checksums stay verifiable.
 tests/Sky.Orbital.Tests/Data/Vallado/* -text
+
+# Recorded CelesTrak responses keep their exact bytes (CelesTrak sends CRLF).
+tests/Sky.CelesTrak.Tests/Fixtures/*.json -text

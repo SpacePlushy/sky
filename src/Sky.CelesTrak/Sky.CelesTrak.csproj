@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sky.Orbital\Sky.Orbital.csproj" />
+  </ItemGroup>
+
+</Project>

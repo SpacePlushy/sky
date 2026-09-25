@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sky.CelesTrak\Sky.CelesTrak.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Shared with Sky.Orbital.Tests: Skyfield's propagation of the same ISS record. -->
+    <None Include="..\Sky.Orbital.Tests\Data\Skyfield\iss-phoenix-2026-09-24.json" Link="Fixtures\iss-phoenix-2026-09-24.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
