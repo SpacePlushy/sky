@@ -1,100 +1,147 @@
 # Sky Over Phoenix
 
-A mission-control-style dashboard that tracks satellites in real time and
-predicts visible passes over a ground observer. The default observer is
-Phoenix, Arizona.
+A satellite ground-station dashboard. It predicts when the International Space Station and other
+satellites pass over an observer in Phoenix, Arizona (or anywhere else), and which of those passes
+you can actually see from the ground. Every number it shows is checked against independent
+references: published worked examples, JPL's planetary ephemeris, the U.S. Naval Observatory, and
+Heavens-Above.
 
-It pulls orbital elements from [CelesTrak](https://celestrak.org), propagates
-orbits with SGP4, and shows where satellites are now, what's coming overhead
-next, and when it's worth going outside to look.
+![The dashboard: a world map with the ISS ground track and footprint, live telemetry, the next
+seven days of passes with the visible ones highlighted, and a polar sky plot of the selected
+pass](docs/images/dashboard-desktop.png)
 
-> **Status:** Milestones 1 (orbital core), 2 (pass prediction and visibility), and 3 (dashboard)
-> are built and in review.
+> **Status:** all four milestones are built and waiting for the owner's review. The suite has 391
+> .NET tests, 171 unit tests for the dashboard, and 10 browser tests. All of them run offline, and CI
+> runs the .NET tests on Linux, macOS, and Windows.
 
-## Try it
+## What it does
 
-**The dashboard, with one command** (needs Docker):
+- **Where a satellite is now**: position, speed, and where to look from the observer (azimuth,
+  elevation, range, range rate), updated every second, with whether it is sunlit.
+- **Every pass for the next 7 days**, with rise, peak, and set found to a millisecond by
+  root-finding, including grazing passes that clear the horizon between samples.
+- **Which passes you can see**: the satellite in sunlight while the observer's sky is dark (the
+  Sun more than 6° below the horizon), and exactly when each visible stretch starts and ends, and
+  why (it rises, leaves the Earth's shadow, sets, or goes into shadow).
+- **Alerts**: a browser notification a few minutes before a visible pass, and a calendar file
+  whose alarms work on a phone.
+- **A command-line tool**, `sky`, that prints the same predictions.
+
+## How it is verified
+
+The owner's bar for this project: the math is right, with no errors and no band-aid fixes. Every
+tolerance below was derived from error analysis before its test first ran, and the measured
+column is the worst case over all inputs.
+
+| What | Checked against | Worst case |
+|---|---|---|
+| SGP4 propagation, 666 states | Vallado's published verification set (AIAA 2006-6753) | 0.12 mm |
+| The whole pipeline: position, subpoint, look angles | Skyfield, an independent Python library | 0.0008 mm, 5×10⁻¹¹° |
+| Rise and set, 25 passes in a week | Skyfield events refined to a microsecond | 0.23 ms |
+| The Sun's direction | JPL's DE421 ephemeris, 1950 to 2049 | 0.0092° (0.0028° in 2026) |
+| Entering and leaving the Earth's shadow, 217 in a week | An independent line-ellipsoid calculation with DE421's Sun | 16 ms |
+| Civil twilight at the observer | The U.S. Naval Observatory's published times | On its printed minute, all 8 |
+| Visible passes | Heavens-Above, on the same element set | Rise and set within 1.1 s |
+
+Tests are written to fail: several were checked by breaking the code on purpose and watching them
+catch it. They run offline on Linux, macOS, and Windows on every push, and weekly, because each
+system's math library rounds differently. Testing also turned up ten problems in the reference
+sources themselves, from an overwritten error code in Vallado's C# SGP4 to a stale UT1 table in
+Skyfield; each is traced and measured in [docs/verification.md](docs/verification.md).
+
+These figures measure the implementation, not SGP4's physics: SGP4 is accurate to about a
+kilometer at the element set's epoch and degrades by kilometers per day after it.
+
+## How it works
+
+```mermaid
+flowchart LR
+    CT[(CelesTrak GP data)] -->|at most once per 2 h per group| Cache[GpCache<br/>policy-enforcing disk cache]
+    Cache --> Core
+    subgraph Core[Sky.Orbital: pure math, no I/O]
+        SGP4[Vallado's SGP4] --> Frames[TEME → Earth-fixed → geodetic, look angles]
+        Frames --> Passes[Pass finder<br/>Brent root-finding]
+        Sun[Sun: Meeus] --> Vis[Visibility<br/>WGS-84 shadow, twilight]
+        Passes --> Vis
+    end
+    Core --> CLI[sky CLI]
+    Core --> API[ASP.NET Core API]
+    API --> Web[TypeScript dashboard<br/>map · telemetry · passes · sky plot]
+    API --> ICS[Calendar export]
+```
+
+- **Sky.Orbital** is pure functions: no network, files, or clock, so every result is reproducible.
+  SGP4 is Vallado's reference code, adapted with every change listed; nothing orbital is written
+  from scratch.
+- **Sky.CelesTrak** keeps Sky within CelesTrak's usage policy: at most one download of each group
+  per 2-hour update, never a retry after an error answer, and one request history shared by every
+  process on the machine through a file lock.
+- **Sky.Api** serves the dashboard and runs the same code as the CLI. The browser takes "now" from
+  the server and converts times to the observer's IANA zone only for display.
+- **The Docker image never contacts CelesTrak** ([ADR 0004](docs/adr/0004-offline-container.md)):
+  it shows recorded data, or reads the CLI's cache read-only.
+
+## Run it
+
+**The dashboard, one command** (Docker):
 
 ```bash
 docker compose up --build        # then open http://localhost:8080
 ```
 
 This shows recorded data from 2026-09-24 on a clock started then, with no network access. For live
-data, fetch it with the CLI first, then point the container at the CLI's cache (it only reads it):
+data, fetch it with the CLI on this machine first, then point the container at the CLI's cache:
 
 ```bash
 dotnet run --project src/Sky.Cli -- passes
 SKY_CACHE_DIR="$HOME/Library/Application Support/sky/celestrak" SKY_CLOCK_START= docker compose up --build
 ```
 
-**The command line** (needs the [.NET 10 SDK](https://dotnet.microsoft.com/download)):
+**The command line** ([.NET 10 SDK](https://dotnet.microsoft.com/download)):
 
 ```bash
-dotnet test --solution Sky.slnx                        # every test runs offline
 dotnet run --project src/Sky.Cli -- now                # where the ISS is right now
-dotnet run --project src/Sky.Cli -- passes             # its next 5 passes over Phoenix
-dotnet run --project src/Sky.Cli -- passes --visible   # only the passes you can see
-dotnet run --project src/Sky.Cli -- passes --sat 48274 --count 3 --min-elevation 30
+dotnet run --project src/Sky.Cli -- passes --visible   # the passes you can see this week
 ```
 
-**The dashboard without Docker**, for development: run the API (`dotnet run --project src/Sky.Api
---urls http://localhost:5080`) and the web app (`npm run dev` in `web/`); see `web/README.md`.
+**The tests:**
 
-The CLI's first run downloads the `stations` group from CelesTrak and caches it. Later runs reuse
-the cache for 6 hours. Sky never requests the same data within 2 hours of its last request, even
-across restarts, an interrupted run, or the CLI and the API running side by side on one machine,
-and it stops and asks for a person if CelesTrak answers with an error. The Docker image never
-contacts CelesTrak at all.
+```bash
+dotnet test --solution Sky.slnx                        # orbital math, cache policy, CLI, API
+cd web && npm ci && npm test && npm run e2e            # dashboard unit and browser tests
+```
 
 To use your own location, copy `src/Sky.Cli/appsettings.Local.example.json` to
-`appsettings.Local.json` in the same folder and edit it; the API reads the same file. It is
-gitignored and never goes into the Docker image; for the container, put `SKY_Observer__*` variables
-in a gitignored `.env.observer` file. The time zone must be an IANA name such as `America/Phoenix`.
-A misspelled setting name is an error, so a typo cannot silently fall back to the Phoenix default.
+`appsettings.Local.json` in the same folder and edit it; the CLI and the API both read it. It is
+gitignored and never goes into the Docker image; for the container, put `SKY_Observer__*`
+variables in a gitignored `.env.observer` file. Time zones are IANA names such as
+`America/Phoenix`.
 
-## How the math is verified
+## What was hard
 
-Correctness is checked at every step, against sources that share no code with Sky:
+- **Finding every pass.** A 10-second scan can miss a pass that clears the minimum elevation for
+  under 10 seconds, or a dip below it that splits one pass into two. A bound on how fast
+  elevation can change decides where to look closer, and Brent's method finds the exact moment.
+- **The right Earth for the shadow.** The Earth is 21 km flatter at the poles; a spherical shadow
+  gets high-latitude shadow entries seconds wrong. Stretching the ellipsoid into a sphere makes the
+  exact test cheap.
+- **Being a good citizen of CelesTrak.** It firewalls clients that make 50 errors in 2 hours. The
+  cache records each request before sending it, stops on any error until a person looks, and
+  coordinates the CLI and the API; the container never requests at all.
+- **Time.** Arizona has no daylight saving time, but the code must not rely on that: times are UTC
+  inside and converted with IANA zone rules only at the edge, and the tests cover the daylight
+  saving changes of other zones.
 
-- **SGP4** reproduces all 666 states in Vallado's published verification set within
-  0.12 mm, and all 7 of its expected error codes.
-- **Frame conversions** match the worked examples in Vallado's 2006 paper and textbook, and
-  satisfy their defining properties across thousands of seeded random inputs.
-- **The full pipeline** matches Skyfield, an independent Python library, to under a
-  millimeter and 10⁻¹⁰ degrees for the ISS over Phoenix.
-- **Pass predictions** match Skyfield's 25 passes over 7 days: rise and set within 0.23 ms and
-  peaks within 0.07 ms, found by Brent's method. Heavens-Above, run on the same element set,
-  agrees to within a second.
-- **Visibility** (satellite sunlit, Sun below −6°) uses a Sun that matches JPL's DE421 ephemeris
-  to 0.003° and an Earth's shadow on the WGS-84 ellipsoid. Shadow entry and exit match an
-  independent reference within 16 ms over a week, and civil twilight matches the U.S. Naval
-  Observatory's published times to the minute.
+## Project history
 
-These figures measure Sky's implementation of SGP4, not SGP4's physics. SGP4 itself is
-accurate to about a kilometer at the element set's epoch, and degrades by kilometers per day
-as the elements age.
+Built in four milestones, each planned, reviewed by an adversarial multi-agent review, and
+documented: [the plans](docs/plans), [the decisions](docs/adr), and
+[the verification record](docs/verification.md).
 
-Every tolerance was set from analysis before its test ran. Tests run on Linux, macOS, and
-Windows on every push, and weekly. Details, measured results, and the issues this process
-found in reference sources are in [docs/verification.md](docs/verification.md).
-
-## Stack
-
-- **Backend:** .NET 10, ASP.NET Core minimal API
-- **Frontend:** TypeScript + Vite, a 2D world map for ground tracks, and a
-  polar sky plot for passes
-- **Tests:** xUnit for orbital math and services, Playwright for end-to-end
-- **CI:** GitHub Actions
-- **Run:** Docker Compose, one command
-
-## Roadmap
-
-1. **Orbital core.** Fetch GP data, SGP4 propagation, coordinate transforms,
-   validation against Vallado's published test cases.
-2. **Pass prediction.** Rise, culmination, and set times refined by
-   root-finding, plus visibility flags.
-3. **Dashboard.** Live map, telemetry panel, 7-day pass table, sky plot.
-4. **Alerts and polish.** Optional pass notifications, full README, E2E tests.
+1. **Orbital core**: CelesTrak data, SGP4, coordinate frames, and the `sky` CLI.
+2. **Pass prediction**: root-finding for rise, peak, and set, and visibility.
+3. **Dashboard**: the API, the web app, and Docker.
+4. **Alerts and polish**: notifications, the calendar export, and browser tests.
 
 ## Credits
 
@@ -103,8 +150,13 @@ found in reference sources are in [docs/verification.md](docs/verification.md).
   https://celestrak.org/publications/AIAA/2006-6753/. See `src/Sky.Sgp4/NOTICE.md`.
 - **Orbital data:** [CelesTrak](https://celestrak.org), used within its
   [usage policy](https://celestrak.org/usage-policy.php).
+- **The Sun's position:** J. Meeus, *Astronomical Algorithms*, 2nd ed., chapter 25.
 - **Reference output** `tcppver.out` from [python-sgp4](https://github.com/brandon-rhodes/python-sgp4) (MIT).
-- **Independent cross-check:** [Skyfield](https://rhodesmill.org/skyfield/) (MIT).
+- **Independent cross-checks:** [Skyfield](https://rhodesmill.org/skyfield/) (MIT) with JPL's
+  DE421, the [U.S. Naval Observatory](https://aa.usno.navy.mil/data/api), and
+  [Heavens-Above](https://www.heavens-above.com).
+- **Map:** [Natural Earth](https://www.naturalearthdata.com) land outlines (public domain), via
+  [world-atlas](https://github.com/topojson/world-atlas), drawn with [d3-geo](https://d3js.org/d3-geo).
 
 ## Why I built this
 
