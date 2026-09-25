@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Pass, SkyPoint, VisiblePart } from "./model";
-import { defaultPass, describeVisiblePart, findByRise, notVisibleReason, passStatus, sameRiseToleranceMs, selectedPass, splitPathByVisibility } from "./passes";
+import { defaultPass, describeVisiblePart, findByRise, hasVisiblePass, notVisibleReason, passStatus, sameRiseToleranceMs, selectedPass, splitPathByVisibility } from "./passes";
 import { ZoneFormat } from "./time";
 
 const minute = 60_000;
@@ -50,6 +50,24 @@ describe("default selection", () => {
     it("else the next pass", () => {
         expect(defaultPass([early, later], base + 10 * minute)).toBe(later);
         expect(defaultPass([early], base + 10 * minute)).toBeUndefined();
+    });
+});
+
+describe("something for the calendar", () => {
+    const dim = pass(0);
+    const bright = pass(95, [part(base + 96 * minute, base + 99 * minute)]);
+
+    it("is a visible part among the passes that have not ended", () => {
+        expect(hasVisiblePass([dim, bright], base - minute)).toBe(true);
+        expect(hasVisiblePass([dim, pass(190)], base - minute)).toBe(false);
+        expect(hasVisiblePass([], base)).toBe(false);
+    });
+
+    it("counts a pass in progress, even once its visible part is over, as the API's export does, but not one that has set", () => {
+        // bright rises at +95 min, is visible from +96 to +99, and sets at +101.
+        expect(hasVisiblePass([dim, bright], base + 100 * minute)).toBe(true);
+        expect(hasVisiblePass([dim, bright], base + 101 * minute)).toBe(true);
+        expect(hasVisiblePass([dim, bright], base + 101 * minute + 1)).toBe(false);
     });
 });
 

@@ -1,19 +1,22 @@
-// The pass-alert control: the on/off button, lead time, and "visible passes only" choice, and the
-// browser notifications themselves. What to alert for and when is decided in alerts.ts from the
-// server's clock; this module only asks for permission, stores the choices, and shows what is due.
+// The pass-alert control: the on/off button, lead time, and "visible passes only" choice. What to
+// alert for and when is decided in alerts.ts from the server's clock, and notifier.ts shows what is
+// due, once across tabs; this module asks for permission, stores the choices, and shows the state.
 //
 // Notifications come from this page, so they work only while a dashboard tab is open; the control
 // says so. In a background tab the browser may run the page's timers only once a minute, so an
 // alert can come up to a minute late there.
+//
+// The choices are shared by every open tab through localStorage: a change in one tab reaches the
+// others through the "storage" event, and each check reads them again before anything is shown.
 
-import { alertMessage, dueAlerts, isLeadMinutes, nextAlert, NotifiedLog, parsePreferences, planAlerts, type AlertEvent, type AlertPreferences } from "./alerts";
+import { isLeadMinutes, parsePreferences, planAlerts, type AlertEvent, type AlertPreferences } from "./alerts";
 import { byId, setText } from "./dom";
 import type { Pass } from "./model";
+import { AlertNotifier, type AlertContext, type Locks } from "./notifier";
 import { readStored, writeStored } from "./storage";
 import { roundToSecond, type ZoneFormat } from "./time";
 
 const preferencesKey = "sky.alerts.preferences";
-const notifiedKey = "sky.alerts.notified";
 
 export interface AlertView {
     readonly satellite: { readonly id: number; readonly name: string } | null;
@@ -38,7 +41,8 @@ function ready(view: AlertView | null): ReadyView | null {
     return view === null || satellite === null || passes === null || nowMs === null ? null : { satellite, passes, nowMs, zone: view.zone };
 }
 
-type Permission = NotificationPermission | "unsupported";
+/** "unusable": the browser has a Notification constructor that always throws (Chrome for Android). */
+type Permission = NotificationPermission | "unsupported" | "unusable";
 
 /** The Notification API, when this page can use it (a secure context such as localhost or HTTPS). */
 function notificationApi(): typeof Notification | null {
@@ -49,24 +53,37 @@ function notificationApi(): typeof Notification | null {
     }
 }
 
-function currentPermission(): Permission {
-    const api = notificationApi();
-    if (api === null) {
-        return "unsupported";
-    }
+/** The Web Locks API, when the browser has it (it too needs a secure context). */
+function lockManager(): Locks | null {
     try {
-        return api.permission;
+        return "locks" in navigator ? navigator.locks : null;
     } catch {
-        return "unsupported";
+        return null;
     }
+}
+
+function samePreferences(a: AlertPreferences, b: AlertPreferences): boolean {
+    return a.enabled === b.enabled && a.leadMinutes === b.leadMinutes && a.visibleOnly === b.visibleOnly;
 }
 
 export class AlertControl {
     private prefs: AlertPreferences;
-    private log: NotifiedLog;
+    /**
+     * Whether the choices in effect are the stored ones. False after a write failed: this visit's
+     * choices then stand, and reading storage again would undo them.
+     */
+    private prefsStored = true;
+    private readonly notifier = new AlertNotifier({
+        read: readStored,
+        write: writeStored,
+        notification: notificationApi,
+        locks: lockManager,
+        focus: () => {
+            window.focus();
+        },
+    });
     private view: AlertView | null = null;
     private requesting = false;
-    private failure: string | null = null;
 
     private readonly toggle = byId("alerts-toggle", HTMLButtonElement);
     private readonly state = byId("alerts-state", HTMLElement);
@@ -76,11 +93,15 @@ export class AlertControl {
 
     constructor() {
         this.prefs = parsePreferences(readStored(preferencesKey));
-        this.log = NotifiedLog.parse(readStored(notifiedKey));
-        this.lead.value = String(this.prefs.leadMinutes);
-        this.visibleOnly.checked = this.prefs.visibleOnly;
+        this.showPreferences();
         this.toggle.addEventListener("click", () => {
             void this.toggleAlerts();
+        });
+        // Another tab changed the choices (key null: it cleared storage).
+        window.addEventListener("storage", (event) => {
+            if ((event.key === null || event.key === preferencesKey) && this.syncPreferences()) {
+                this.render();
+            }
         });
         this.lead.addEventListener("change", () => {
             const minutes = Number(this.lead.value);
@@ -105,51 +126,68 @@ export class AlertControl {
         this.render();
     }
 
+    private permission(): Permission {
+        const api = notificationApi();
+        if (api === null) {
+            return "unsupported";
+        }
+        if (this.notifier.cannotShow) {
+            return "unusable";
+        }
+        try {
+            return api.permission;
+        } catch {
+            return "unsupported";
+        }
+    }
+
     private get active(): boolean {
-        return this.prefs.enabled && currentPermission() === "granted";
+        return this.prefs.enabled && this.permission() === "granted";
     }
 
     private plan(view: ReadyView): AlertEvent[] {
         return planAlerts(view.satellite.id, view.passes, this.prefs, view.nowMs);
     }
 
-    private check(): void {
-        const view = ready(this.view);
-        if (!this.active || view === null) {
-            return;
+    /** Puts the choices in the controls, touching only what differs. */
+    private showPreferences(): void {
+        const lead = String(this.prefs.leadMinutes);
+        if (this.lead.value !== lead) {
+            this.lead.value = lead;
         }
-        const plan = this.plan(view);
-        if (dueAlerts(plan, view.nowMs, this.log).length === 0) {
-            return;
+        if (this.visibleOnly.checked !== this.prefs.visibleOnly) {
+            this.visibleOnly.checked = this.prefs.visibleOnly;
         }
-        // Another dashboard tab may have shown it already: fold in what storage remembers first.
-        this.log = NotifiedLog.merge(this.log, NotifiedLog.parse(readStored(notifiedKey)));
-        for (const event of dueAlerts(plan, view.nowMs, this.log)) {
-            // Logged before it is shown, so a browser that refuses is not asked again every second.
-            this.log.add(event);
-            this.show(event, view.satellite.name, view.nowMs, view.zone);
-        }
-        this.log.prune(view.nowMs);
-        writeStored(notifiedKey, JSON.stringify(this.log));
     }
 
-    private show(event: AlertEvent, satelliteName: string, nowMs: number, zone: ZoneFormat): void {
-        const api = notificationApi();
-        if (api === null) {
-            return;
+    /** Reads the stored choices again, which another tab may have changed. True when they changed here. */
+    private syncPreferences(): boolean {
+        if (!this.prefsStored) {
+            return false;
         }
-        const { title, body } = alertMessage(event, satelliteName, nowMs, zone);
-        try {
-            // The tag makes a second copy (from another tab) replace the first instead of stacking.
-            const notification = new api(title, { body, tag: event.key });
-            notification.onclick = () => {
-                window.focus();
-                notification.close();
-            };
-            this.failure = null;
-        } catch (error) {
-            this.failure = `The browser would not show a notification (${error instanceof Error ? error.message : String(error)}). The calendar file works instead.`;
+        const stored = parsePreferences(readStored(preferencesKey));
+        if (samePreferences(stored, this.prefs)) {
+            return false;
         }
+        this.prefs = stored;
+        this.showPreferences();
+        return true;
+    }
+
+    /** What to alert for now, with the choices read afresh; null when alerts are off or not ready. */
+    private context(): AlertContext | null {
+        this.syncPreferences();
+        const view = ready(this.view);
+        if (!this.active || view === null) {
+            return null;
+        }
+        return { plan: this.plan(view), nowMs: view.nowMs, satelliteName: view.satellite.name, zone: view.zone };
+    }
+
+    private check(): void {
+        void this.notifier.check(() => this.context()).then(() => {
+            this.render();
+        });
     }
 
     private async toggleAlerts(): Promise<void> {
@@ -161,18 +199,18 @@ export class AlertControl {
             return;
         }
         const api = notificationApi();
-        if (api === null) {
+        if (api === null || this.notifier.cannotShow) {
             this.render();
             return;
         }
-        let permission = currentPermission();
+        let permission = this.permission();
         if (permission !== "granted") {
             this.requesting = true;
             this.render();
             try {
                 permission = await api.requestPermission();
             } catch {
-                permission = currentPermission();
+                permission = this.permission();
             } finally {
                 this.requesting = false;
             }
@@ -182,28 +220,42 @@ export class AlertControl {
 
     private save(prefs: AlertPreferences): void {
         this.prefs = prefs;
-        writeStored(preferencesKey, JSON.stringify(prefs));
+        this.prefsStored = writeStored(preferencesKey, JSON.stringify(prefs));
         this.check();
         this.render();
     }
 
     private render(): void {
-        const permission = currentPermission();
+        const permission = this.permission();
         const on = this.active;
-        const state = permission === "unsupported" ? "Unavailable" : permission === "denied" ? "Blocked" : on ? "On" : "Off";
+        const unavailable = permission === "unsupported" || permission === "unusable";
+        const state = unavailable ? "Unavailable" : permission === "denied" ? "Blocked" : on ? "On" : "Off";
         setText(this.state, state);
         if (this.state.dataset.state !== state.toLowerCase()) {
             this.state.dataset.state = state.toLowerCase();
         }
         setText(this.toggle, on ? "Turn off alerts" : "Turn on alerts");
-        this.toggle.disabled = permission === "unsupported" || this.requesting;
+        // Natively disabled only when alerts cannot work at all. While the browser asks for
+        // permission the button stays focusable (a disabled one would drop keyboard focus to the
+        // page) and is marked aria-disabled; toggleAlerts ignores presses meanwhile.
+        if (this.toggle.disabled !== unavailable) {
+            this.toggle.disabled = unavailable;
+        }
+        if (this.requesting && !unavailable) {
+            this.toggle.setAttribute("aria-disabled", "true");
+        } else {
+            this.toggle.removeAttribute("aria-disabled");
+        }
         setText(this.status, this.statusText(permission, on));
     }
 
     private statusText(permission: Permission, on: boolean): string {
         const what = this.prefs.visibleOnly ? "visible pass" : "pass";
         if (permission === "unsupported") {
-            return "This browser cannot show notifications for this page (they need HTTPS or localhost). The calendar file works instead.";
+            return "This browser cannot show notifications for this page (they need HTTPS or localhost). Use the calendar file instead.";
+        }
+        if (permission === "unusable") {
+            return "This browser does not let a web page show notifications itself (Chrome on Android allows them only from a service worker). Use the calendar file instead.";
         }
         if (permission === "denied") {
             return "Notifications are blocked for this page. Allow them in the browser's site settings, then turn alerts on.";
@@ -211,8 +263,9 @@ export class AlertControl {
         if (this.requesting) {
             return "Waiting for the browser's permission…";
         }
-        if (this.failure !== null) {
-            return this.failure;
+        const failure = this.notifier.failure;
+        if (failure !== null) {
+            return failure;
         }
         if (!on) {
             return `A notification ${this.prefs.leadMinutes} min before each ${what}, once you turn alerts on.`;
@@ -221,7 +274,7 @@ export class AlertControl {
         if (view === null) {
             return "On. Waiting for the pass list.";
         }
-        const next = nextAlert(this.plan(view), view.nowMs, this.log);
+        const next = this.notifier.next(this.plan(view), view.nowMs);
         if (next === undefined) {
             return `On. No ${what} left in the list to alert for.`;
         }

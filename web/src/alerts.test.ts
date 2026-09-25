@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+    aheadLimitMs,
     alertEvent,
     alertKey,
     alertMessage,
+    alertTag,
     defaultPreferences,
     dueAlerts,
     minutesUntil,
@@ -105,6 +107,18 @@ describe("which events alert", () => {
     it("keys an alert by the satellite and the event's start", () => {
         expect(alertEvent(iss, bright, tenVisible)?.key).toBe("25544@2026-09-25T03:07:26.000Z");
         expect(alertKey(48274, firstVisible)).toBe("48274@2026-09-25T03:07:26.000Z");
+    });
+
+    it("tags a notification by the satellite and the minute of the start, the same for starts a millisecond apart", () => {
+        expect(alertTag(iss, firstVisible)).toBe("25544@2026-09-25T03:07Z");
+        // Two tabs' pass lists can put the same start 1 ms apart; both get one tag.
+        expect(alertTag(iss, firstVisible + 1)).toBe(alertTag(iss, firstVisible));
+        expect(alertTag(iss, firstVisible - 1)).toBe(alertTag(iss, firstVisible));
+        // The whole minute 03:07:00.000 to 03:07:59.999 is one tag; the next minute and another satellite are not.
+        expect(alertTag(iss, firstVisible - 26 * second)).toBe("25544@2026-09-25T03:07Z");
+        expect(alertTag(iss, firstVisible + 34 * second - 1)).toBe("25544@2026-09-25T03:07Z");
+        expect(alertTag(iss, firstVisible + 34 * second)).toBe("25544@2026-09-25T03:08Z");
+        expect(alertTag(48274, firstVisible)).toBe("48274@2026-09-25T03:07Z");
     });
 });
 
@@ -233,6 +247,54 @@ describe("never twice", () => {
         ]);
         log.prune(firstVisible);
         expect(log.toJSON().map((e) => e.startMs)).toEqual([firstVisible - 24 * hour]);
+    });
+
+    it("forgets events further ahead than the longest lead plus the same-pass tolerance: only a clock that went back logs those", () => {
+        // 15 minutes, the longest lead, plus 2 minutes.
+        expect(aheadLimitMs).toBe(17 * minute);
+        const entry = (startMs: number): { satelliteId: number; riseMs: number; startMs: number } => ({ satelliteId: iss, riseMs: startMs - 2 * minute, startMs });
+        const now = firstVisible - hour;
+        const log = new NotifiedLog([entry(now + 15 * minute), entry(now + 17 * minute), entry(now + 17 * minute + 1), entry(now + 3 * hour)]);
+        log.prune(now);
+        expect(log.toJSON().map((e) => e.startMs - now)).toEqual([15 * minute, 17 * minute]);
+    });
+
+    it("alerts again for a pass the simulated clock replays after a restart", () => {
+        const event = alertEvent(iss, bright, { leadMinutes: 15, visibleOnly: true });
+        if (event === null) {
+            throw new Error("expected an event");
+        }
+        // Shown at its alert time, and stored.
+        const log = new NotifiedLog();
+        log.add(event);
+        log.prune(event.alertMs);
+        const stored = JSON.stringify(log);
+
+        // The server restarts with its clock 17 min 26 s before the start, and the page reloads.
+        const restart = firstVisible - 17 * minute - 26 * second;
+        const reloaded = NotifiedLog.parse(stored);
+        reloaded.prune(restart);
+        expect(reloaded.size).toBe(0);
+        expect(dueAlerts([event], event.alertMs, reloaded)).toEqual([event]);
+
+        // A reload on a clock that runs on keeps it: 14 minutes ahead is inside the window.
+        const later = NotifiedLog.parse(stored);
+        later.prune(firstVisible - 14 * minute);
+        expect(dueAlerts([event], firstVisible - 14 * minute, later)).toEqual([]);
+    });
+
+    it("takes back an alert the browser could not show, and only that one", () => {
+        const [first, second_] = planAlerts(iss, [bright, later], tenAll, firstVisible - hour);
+        if (first === undefined || second_ === undefined) {
+            throw new Error("expected two events");
+        }
+        const log = new NotifiedLog();
+        log.add(first);
+        log.add(second_);
+        log.remove(second_);
+        expect(log.has(first)).toBe(true);
+        expect(log.has(second_)).toBe(false);
+        expect(log.size).toBe(1);
     });
 });
 

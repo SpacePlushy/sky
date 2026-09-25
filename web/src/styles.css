@@ -667,6 +667,14 @@ select {
     padding-top: 6px;
 }
 
+.calendar-line {
+    margin: 0;
+}
+
+.calendar-note {
+    margin: 4px 0 0;
+}
+
 .calendar-link {
     color: var(--accent);
     font-weight: 600;
@@ -733,7 +741,8 @@ select {
     border-color: var(--accent);
 }
 
-.button:disabled {
+.button:disabled,
+.button[aria-disabled="true"] {
     color: var(--muted);
     cursor: not-allowed;
 }

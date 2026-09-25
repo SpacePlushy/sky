@@ -11,6 +11,10 @@
 // - An event that has alerted never alerts again. It is remembered by satellite and start time
 //   (the key), and also matches a later event of the same satellite whose start or rise moved by
 //   less than sameRiseToleranceMs, which is what new elements do to the same pass.
+// - A remembered alert whose start is further ahead than the longest lead plus that tolerance is
+//   forgotten. No alert is ever shown earlier than its start minus the longest lead, so such an
+//   entry means the clock went backwards: the demo's simulated clock restarted and is replaying
+//   the same passes, which must alert again.
 
 import { azimuthLabel, fixed } from "./format";
 import type { Pass } from "./model";
@@ -78,6 +82,18 @@ export function alertKey(satelliteId: number, startMs: number): string {
     return `${satelliteId}@${new Date(startMs).toISOString()}`;
 }
 
+/**
+ * The notification tag for an event: the satellite and the minute its start falls in,
+ * "25544@2026-09-25T03:07Z". Two tabs can list the same pass with starts a millisecond apart (two
+ * searches from different moments), and they still compute the same tag, so a copy from a second
+ * tab replaces the first instead of stacking. Only a start that straddles a whole minute gets two
+ * tags; the cross-tab lock in notifier.ts keeps a second copy from being made at all.
+ */
+export function alertTag(satelliteId: number, startMs: number): string {
+    const minute = new Date(Math.floor(startMs / minuteMs) * minuteMs).toISOString().slice(0, 16);
+    return `${satelliteId}@${minute}Z`;
+}
+
 /** The event a pass alerts for with these options, or null when it does not alert. */
 export function alertEvent(satelliteId: number, pass: Pass, options: AlertOptions): AlertEvent | null {
     const part = pass.visible[0];
@@ -122,6 +138,12 @@ export interface NotifiedEntry {
 
 /** How long a shown alert is remembered after its event started. Passes are listed a week ahead. */
 const rememberMs = 8 * 24 * 60 * minuteMs;
+/**
+ * How far ahead of now a shown alert's start can be: the longest lead, plus the tolerance by which
+ * the same pass's start may differ between tabs and refreshes. Anything further ahead was logged
+ * by a clock that has since gone backwards.
+ */
+export const aheadLimitMs = Math.max(...leadChoices) * minuteMs + sameRiseToleranceMs;
 /** At most this many entries are kept, the latest by start. */
 const maximumEntries = 500;
 
@@ -184,12 +206,23 @@ export class NotifiedLog {
         }
     }
 
-    /** Forgets alerts for events that started long ago, and keeps the log bounded. */
-    prune(nowMs: number): void {
+    /** Forgets the entry `add` made for this event, for an alert the browser could not show after all. */
+    remove(event: AlertEvent): void {
+        this.entries = this.entries.filter((e) => !(e.satelliteId === event.satelliteId && e.riseMs === event.riseMs && e.startMs === event.startMs));
+    }
+
+    /**
+     * Forgets alerts for events that started long ago, and those further ahead than any alert can
+     * be shown (aheadLimitMs), which a clock that went backwards left behind. Keeps the log bounded.
+     * True when it forgot any.
+     */
+    prune(nowMs: number): boolean {
+        const before = this.entries.length;
         this.entries = this.entries
-            .filter((e) => e.startMs >= nowMs - rememberMs)
+            .filter((e) => e.startMs >= nowMs - rememberMs && e.startMs <= nowMs + aheadLimitMs)
             .sort((a, b) => a.startMs - b.startMs)
             .slice(-maximumEntries);
+        return this.entries.length < before;
     }
 
     toJSON(): NotifiedEntry[] {

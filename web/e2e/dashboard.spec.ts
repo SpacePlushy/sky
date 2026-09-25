@@ -2,7 +2,7 @@
 // the pass list, selection, and an accessibility smoke test. Desktop viewport, 1440 x 900.
 
 import { expect, test } from "./fixtures";
-import { clockTexts, getJson, ms, parseAngle, phoenix, waitForDashboard, type NowJson, type PassesJson } from "./helpers";
+import { clockTexts, getJson, listedRows, ms, parseAngle, passRow, phoenix, risesAfter, serverNow, waitForDashboard, type NowJson, type PassesJson } from "./helpers";
 import { iss, mainServer } from "./servers";
 
 test("loads offline on the simulated clock, with telemetry matching /now", async ({ page, request }) => {
@@ -73,7 +73,7 @@ test("lists the same passes as /passes, in Phoenix time, with visible ones marke
     }).toPass({ timeout: 15_000 });
 });
 
-test("selecting a pass by keyboard and by click redraws the sky plot, and the choice survives a refresh", async ({ page }) => {
+test("selecting a pass by keyboard and by click redraws the sky plot, and the choice survives a refresh", async ({ page, request }) => {
     // The page refreshes the pass list on a 5-minute timer; a fake browser clock fast-forwards it.
     await page.clock.install();
     let passesRequests = 0;
@@ -97,42 +97,52 @@ test("selecting a pass by keyboard and by click redraws the sky plot, and the ch
     await page.goto("/");
     await waitForDashboard(page);
     const caption = page.locator("#sky-caption");
-    const buttons = page.locator("button.pass");
-    const count = await buttons.count();
-    const riseOf = async (i: number): Promise<number> => Number(await buttons.nth(i).getAttribute("data-rise"));
-    const expectPlotted = async (i: number): Promise<void> => {
-        const rise = await riseOf(i);
-        await expect(buttons.nth(i)).toHaveAttribute("aria-pressed", "true");
+
+    // Rows by rise, never by position (see risesAfter). The three used here rise more than 10
+    // minutes after the server's now, so neither the first pass ending nor the 5-minute jump below
+    // touches them, and after the passes the page plots by default (the next pass, the next visible
+    // one), so each step changes what is plotted.
+    const now = await serverNow(request);
+    const rows = await listedRows(page);
+    const upcoming = rows.filter((r) => r.rise > now);
+    const defaults = [upcoming[0], upcoming.find((r) => r.visible)].map((r) => r?.rise ?? now);
+    const after = Math.max(now + 10 * 60_000, ...defaults);
+    const [a, b, c] = rows.filter((r) => r.rise > after).map((r) => r.rise);
+    const last = rows.at(-1)?.rise;
+    if (a === undefined || b === undefined || c === undefined || last === undefined) {
+        throw new Error("fewer than three passes to select");
+    }
+    const expectPlotted = async (rise: number): Promise<void> => {
+        await expect(passRow(page, rise)).toHaveAttribute("aria-pressed", "true");
         await expect(page.locator('button.pass[aria-pressed="true"]')).toHaveCount(1);
-        await expect(buttons.nth(i).locator(".badge-plotted")).toHaveText("On sky plot");
+        await expect(passRow(page, rise).locator(".badge-plotted")).toHaveText("On sky plot");
         const { date, clock } = phoenix(Math.round(rise / 1000) * 1000);
         await expect(caption).toContainText(`${date}: rises ${clock}`);
     };
 
     // Keyboard: Enter on one row, then Tab to the next and Space.
-    await buttons.nth(2).focus();
+    await passRow(page, a).focus();
     await page.keyboard.press("Enter");
-    await expectPlotted(2);
-    await expect(buttons.nth(2)).toBeFocused();
+    await expectPlotted(a);
+    await expect(passRow(page, a)).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(buttons.nth(3)).toBeFocused();
+    await expect(passRow(page, b)).toBeFocused();
     await page.keyboard.press("Space");
-    await expectPlotted(3);
+    await expectPlotted(b);
 
     // Click.
-    await buttons.nth(4).click();
-    await expectPlotted(4);
-    const chosenRise = await riseOf(4);
+    await passRow(page, c).click();
+    await expectPlotted(c);
+    const chosenRise = c;
     const captionBefore = await caption.textContent();
 
     // Refresh: past the 5-minute timer. The last row leaves only when the page takes in the new list.
-    const lastRise = await riseOf(count - 1);
     refreshing = true;
     const requestsBefore = passesRequests;
     const refreshed = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/satellites/${iss}/passes` && r.ok());
     await page.clock.fastForward(5 * 60_000 + 5_000);
     await refreshed;
-    await expect(page.locator(`button.pass[data-rise="${lastRise}"]`)).toHaveCount(0);
+    await expect(passRow(page, last)).toHaveCount(0);
     expect(passesRequests).toBe(requestsBefore + 1);
 
     const pressed = page.locator('button.pass[aria-pressed="true"]');
@@ -148,7 +158,7 @@ test("selecting a pass by keyboard and by click redraws the sky plot, and the ch
     expect(tail(captionAfter)).toBe(tail(captionBefore ?? ""));
 });
 
-test("the map and sky plot have accessible names, and Tab reaches the controls and the pass rows", async ({ page }) => {
+test("the map and sky plot have accessible names, and Tab reaches the controls and the pass rows", async ({ page, request }) => {
     await page.goto("/");
     await waitForDashboard(page);
     await expect(page.getByRole("img", { name: /^World map with the satellite's ground track/ })).toBeVisible();
@@ -171,7 +181,12 @@ test("the map and sky plot have accessible names, and Tab reaches the controls a
     }
     expect(reached).toEqual(expect.arrayContaining(["#satellite", "#calendar-link", "#alerts-toggle", "#alerts-lead", "#alerts-visible-only"]));
     expect(reached.at(-1)).toBe("pass");
-    // And on through the rows.
+    // And on through the rows, from one that stays listed for the whole test (see risesAfter).
+    const [first, second] = await risesAfter(page, request, 10);
+    if (first === undefined || second === undefined) {
+        throw new Error("fewer than two passes ahead");
+    }
+    await passRow(page, first).focus();
     await page.keyboard.press("Tab");
-    await expect(page.locator("button.pass").nth(1)).toBeFocused();
+    await expect(passRow(page, second)).toBeFocused();
 });

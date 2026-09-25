@@ -71,9 +71,13 @@
             <section class="panel panel-passes" aria-labelledby="passes-heading">
                 <h2 id="passes-heading">Passes, next 7 days</h2>
                 <div class="pass-tools">
-                    <p class="calendar">
-                        <a id="calendar-link" class="calendar-link" download hidden>Add visible passes to your calendar (.ics, alarm 10&nbsp;min before)</a>
-                    </p>
+                    <div class="calendar">
+                        <div id="calendar-offer" hidden>
+                            <p class="calendar-line"><a id="calendar-link" class="calendar-link" download aria-describedby="calendar-alarm">Add visible passes to your calendar (.ics, alarm 10&nbsp;min before)</a></p>
+                            <p id="calendar-alarm" class="panel-note calendar-note">The file has a 10-minute alarm on each visible pass. Apple Calendar and Outlook keep the alarm; Google Calendar ignores alarms in imported files and uses its own default notifications.</p>
+                        </div>
+                        <p id="calendar-none" class="panel-note calendar-note" hidden>No visible passes in the next 7 days, so there is nothing to add to a calendar.</p>
+                    </div>
                     <fieldset class="alerts">
                         <legend>Browser alerts <span id="alerts-state" class="alerts-state" data-state="off">Off</span></legend>
                         <div class="alerts-controls">
@@ -88,7 +92,7 @@
                             <label class="alerts-field alerts-check"><input type="checkbox" id="alerts-visible-only" checked /> Visible passes only</label>
                         </div>
                         <p id="alerts-status" class="alerts-status" role="status"></p>
-                        <p id="alerts-scope" class="panel-note alerts-scope">Alerts only work while this tab is open. For alerts with the tab closed, use the calendar file.</p>
+                        <p id="alerts-scope" class="panel-note alerts-scope">Alerts only work while this tab is open. With it closed, use the calendar file: Apple Calendar and Outlook keep its alarms, while Google Calendar uses its own default notifications.</p>
                     </fieldset>
                 </div>
                 <p id="passes-note" class="panel-note"></p>

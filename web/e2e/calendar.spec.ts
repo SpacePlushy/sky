@@ -1,9 +1,12 @@
 // The calendar link downloads the API's iCalendar export of the selected satellite's visible passes.
+// It is offered only when the loaded pass list has a visible part: the API has no file otherwise.
 
 import { readFile } from "node:fs/promises";
 import { expect, test } from "./fixtures";
 import { getJson, icsTimes, ms, waitForDashboard, type PassesJson } from "./helpers";
-import { iss } from "./servers";
+import { iss, noVisiblePasses } from "./servers";
+
+const nothingToAdd = "No visible passes in the next 7 days, so there is nothing to add to a calendar.";
 
 /** RFC 5545 §3.1: a CRLF followed by a space or tab continues the previous line. */
 function unfold(text: string): string[] {
@@ -16,6 +19,13 @@ test("the calendar link downloads one event with an alarm per visible part", asy
 
     const link = page.getByRole("link", { name: "Add visible passes to your calendar (.ics, alarm 10 min before)" });
     await expect(link).toHaveAttribute("href", `/api/satellites/${iss}/passes.ics?days=7&visibleOnly=true&alarm=10`);
+    // The alarm claim is qualified beside the link, and the link points to it.
+    await expect(page.locator("#calendar-alarm")).toHaveText(
+        "The file has a 10-minute alarm on each visible pass. Apple Calendar and Outlook keep the alarm; " +
+        "Google Calendar ignores alarms in imported files and uses its own default notifications.",
+    );
+    await expect(link).toHaveAttribute("aria-describedby", "calendar-alarm");
+    await expect(page.locator("#calendar-none")).toBeHidden();
     const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
     expect(download.suggestedFilename()).toBe(`sky-${iss}-passes.ics`);
     const text = await readFile(await download.path(), "utf8");
@@ -67,4 +77,59 @@ test("the calendar link follows the selected satellite", async ({ page, request 
     expect(other).toBeDefined();
     await page.locator("#satellite").selectOption(String(other?.id));
     await expect(page.locator("#calendar-link")).toHaveAttribute("href", `/api/satellites/${other?.id}/passes.ics?days=7&visibleOnly=true&alarm=10`);
+});
+
+test("the calendar link waits for the pass list, and is not offered when it fails to load", async ({ page }) => {
+    // The ISS pass list is held until the test lets it through.
+    let release = (): void => undefined;
+    const held = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    await page.route(`**/api/satellites/${iss}/passes?*`, async (route) => {
+        await held;
+        await route.continue();
+    });
+
+    await page.goto("/");
+    await expect(page.locator(".row-latitude .value")).not.toHaveText("—", { timeout: 20_000 });
+    await expect(page.locator("#passes")).toHaveText("Loading passes…");
+    await expect(page.locator("#calendar-link")).toBeHidden();
+    await expect(page.locator("#calendar-none")).toBeHidden();
+
+    release();
+    await waitForDashboard(page);
+    await expect(page.locator("#calendar-link")).toBeVisible();
+
+    // A failed load: another satellite's list fails, and nothing is offered for it.
+    const satellites = await page.locator("#satellite option").evaluateAll((options) => options.map((o) => o.getAttribute("value") ?? ""));
+    const other = satellites.find((id) => id !== "" && id !== String(iss));
+    if (other === undefined) {
+        throw new Error("no other satellite to choose");
+    }
+    await page.route(`**/api/satellites/${other}/passes?*`, (route) =>
+        route.fulfill({ status: 503, contentType: "application/problem+json", body: JSON.stringify({ title: "Service unavailable", detail: "Failed by the test." }) }));
+    await page.locator("#satellite").selectOption(other);
+    await expect(page.locator("#passes")).toHaveText("Passes could not be loaded.");
+    await expect(page.locator("#calendar-link")).toBeHidden();
+    await expect(page.locator("#calendar-none")).toBeHidden();
+});
+
+test("says there is nothing to add for a satellite with no visible pass, for which the API has no file", async ({ page, request }) => {
+    const data = await getJson<PassesJson>(request, `/api/satellites/${noVisiblePasses}/passes?days=7`);
+    expect(data.passes.length).toBeGreaterThan(0);
+    expect(data.passes.flatMap((p) => p.visible)).toEqual([]);
+    const file = await request.get(`/api/satellites/${noVisiblePasses}/passes.ics?days=7&visibleOnly=true&alarm=10`);
+    expect(file.status()).toBe(404);
+    expect(file.headers()["content-type"]).toContain("application/problem+json");
+
+    await page.goto(`/?sat=${noVisiblePasses}`);
+    await waitForDashboard(page);
+    await expect(page.locator("#calendar-none")).toHaveText(nothingToAdd);
+    await expect(page.locator("#calendar-none")).toBeVisible();
+    await expect(page.locator("#calendar-link")).toBeHidden();
+
+    // A satellite with visible passes brings the link back, once its list has loaded.
+    await page.locator("#satellite").selectOption(String(iss));
+    await expect(page.locator("#calendar-link")).toBeVisible();
+    await expect(page.locator("#calendar-none")).toBeHidden();
 });

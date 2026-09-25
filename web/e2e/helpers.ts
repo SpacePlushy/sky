@@ -1,7 +1,7 @@
 // Helpers for the end-to-end tests: the API's JSON (only the fields the tests read), time
 // formatting written independently of the page's code, and waits for the dashboard's data.
 
-import { expect, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 export interface EventJson {
     readonly timeUtc: string;
@@ -115,6 +115,40 @@ export function parseAngle(text: string): number {
     const [, minus, digits, hemisphere] = match;
     const negative = (minus !== undefined && minus !== "") !== (hemisphere === "S" || hemisphere === "W");
     return (negative ? -1 : 1) * Number(digits);
+}
+
+/** The server's clock now, from /api/config. */
+export async function serverNow(request: APIRequestContext): Promise<number> {
+    return ms((await getJson<ConfigJson>(request, "/api/config")).serverTimeUtc);
+}
+
+export interface ListedRow {
+    /** The row's data-rise: the pass's rise in milliseconds, as the page received it. */
+    readonly rise: number;
+    readonly visible: boolean;
+}
+
+/** The pass rows the page lists, in order. */
+export async function listedRows(page: Page): Promise<ListedRow[]> {
+    return page.locator("button.pass").evaluateAll((buttons) => buttons.map((b) => ({
+        rise: Number(b.getAttribute("data-rise")),
+        visible: b.querySelector(".badge-visible") !== null,
+    })));
+}
+
+/**
+ * The listed passes that rise more than `minutes` after the server's now, in list order. Tests
+ * address rows by rise (button.pass[data-rise]), never by position: the main server's clock starts
+ * inside a pass that ends 63 s later, and the page drops that row then, shifting every index.
+ */
+export async function risesAfter(page: Page, request: APIRequestContext, minutes: number): Promise<number[]> {
+    const after = (await serverNow(request)) + minutes * 60_000;
+    return (await listedRows(page)).map((r) => r.rise).filter((rise) => rise > after);
+}
+
+/** A pass row by its rise. */
+export function passRow(page: Page, rise: number): Locator {
+    return page.locator(`button.pass[data-rise="${rise}"]`);
 }
 
 /** Waits until the dashboard shows telemetry, a pass list, and a sky plot caption. */

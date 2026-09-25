@@ -25,6 +25,16 @@ export function defaultPass(passes: readonly Pass[], nowMs: number): Pass | unde
 }
 
 /**
+ * Whether the listed passes (those that have not ended, as the pass list shows them) include a
+ * visible part. The calendar export has the same passes, every pass up at any moment from the
+ * request on, and its visible-only file has an event for each visible part; the API answers 404
+ * when there is none, so the page offers the file only when this is true.
+ */
+export function hasVisiblePass(passes: readonly Pass[], nowMs: number): boolean {
+    return passes.some((p) => p.visible.length > 0 && passStatus(p, nowMs) !== "ended");
+}
+
+/**
  * How far a chosen pass's rise may move and still be the same pass. A refetch with the same
  * elements can move a rise by a millisecond (the root-finding tolerance, from a different search
  * start); new elements move it by seconds. Passes of one satellite over one observer rise at least

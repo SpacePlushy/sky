@@ -1,4 +1,4 @@
-// Browser notifications, against the server whose clock starts 17 min 26 s before the first
+// Browser notifications, against the server whose clock starts 16 min 26 s before the first
 // evening visible ISS pass. window.Notification is replaced by a recorder, so the test sees every
 // notification the page creates, across reloads (sessionStorage), without the operating system.
 
@@ -13,12 +13,25 @@ interface Shown {
     readonly tag: string;
 }
 
+interface Recorder {
+    /** What requestPermission() answers; null asks the real API (which the test context has granted). */
+    readonly answer: NotificationPermission | null;
+    /** Notification.permission before the tab has asked. */
+    readonly initial: NotificationPermission;
+    /** Whether requestPermission() waits until the test calls window.e2eAnswerPermission(). */
+    readonly hold: boolean;
+}
+
+function recorder(options: Partial<Recorder> = {}): Recorder {
+    return { answer: null, initial: "default", hold: false, ...options };
+}
+
 /**
- * Replaces window.Notification before the page's scripts run. Permission starts as "default"; the
- * first requestPermission() asks the real API (which the test context has granted, or the answer
- * given) and remembers the result for the rest of the tab's life.
+ * Replaces window.Notification before the page's scripts run. Permission starts as `initial`; the
+ * first requestPermission() answers `answer` (or asks the real API) and remembers the result for
+ * the rest of the tab's life.
  */
-function recordNotifications(answer: string | null): void {
+function recordNotifications(options: Recorder): void {
     const read = <T,>(key: string, fallback: T): T => {
         try {
             const text = sessionStorage.getItem(key);
@@ -30,6 +43,11 @@ function recordNotifications(answer: string | null): void {
     const write = (key: string, value: unknown): void => {
         sessionStorage.setItem(key, JSON.stringify(value));
     };
+    let answerPermission = (): void => undefined;
+    const answered = new Promise<void>((resolve) => {
+        answerPermission = resolve;
+    });
+    Object.defineProperty(window, "e2eAnswerPermission", { value: () => { answerPermission(); }, configurable: true });
     const Real = window.Notification;
     class RecordingNotification {
         onclick: (() => void) | null = null;
@@ -40,11 +58,14 @@ function recordNotifications(answer: string | null): void {
             // Nothing to close.
         }
         static get permission(): NotificationPermission {
-            return read<NotificationPermission>("e2e.permission", "default");
+            return read<NotificationPermission>("e2e.permission", options.initial);
         }
         static async requestPermission(): Promise<NotificationPermission> {
             write("e2e.permissionRequests", read("e2e.permissionRequests", 0) + 1);
-            const result = (answer as NotificationPermission | null) ?? (await Real.requestPermission());
+            if (options.hold) {
+                await answered;
+            }
+            const result = options.answer ?? (await Real.requestPermission());
             write("e2e.permission", result);
             return result;
         }
@@ -65,7 +86,7 @@ test.describe("on the alert server", () => {
     test("one notification for the first visible pass, at start minus the lead, never repeated", async ({ page, context, request }) => {
         test.setTimeout(120_000);
         await context.grantPermissions(["notifications"], { origin: alertServer.url });
-        await page.addInitScript(recordNotifications, null);
+        await page.addInitScript(recordNotifications, recorder());
         await page.clock.install();
         await page.goto("/");
         await waitForDashboard(page);
@@ -96,7 +117,10 @@ test.describe("on the alert server", () => {
         await expect(page.locator("#alerts-status")).toContainText(`Next alert ${phoenix(roundToSecond(alertAt)).date} ${phoenix(roundToSecond(alertAt)).clock}, 15 min before ISS (ZARYA) is visible at ${startsAt.clock}.`);
         expect((await recorded(page)).shown).toEqual([]);
 
-        const forThisPass = (shown: Shown[]): Shown[] => shown.filter((n) => Math.abs(Date.parse(n.tag.split("@")[1] ?? "") - start) < 1000);
+        // The tag is the satellite and the minute the start falls in, the same in every tab even
+        // when their pass lists put the start a millisecond apart: "25544@2026-09-25T03:07Z".
+        const tag = `${iss}@${new Date(Math.floor(start / 60_000) * 60_000).toISOString().slice(0, 16)}Z`;
+        const forThisPass = (shown: Shown[]): Shown[] => shown.filter((n) => n.tag === tag);
 
         /**
          * Jumps the page's clock so the server time it computes is `offset` ms from the alert time.
@@ -156,11 +180,71 @@ test.describe("on the alert server", () => {
 });
 
 test("shows Blocked when the browser denies notifications", async ({ page }) => {
-    await page.addInitScript(recordNotifications, "denied");
+    await page.addInitScript(recordNotifications, recorder({ answer: "denied" }));
     await page.goto(mainServer.url);
     await waitForDashboard(page);
     await page.getByRole("button", { name: "Turn on alerts" }).click();
     await expect(page.locator("#alerts-state")).toHaveText("Blocked");
     await expect(page.locator("#alerts-status")).toContainText("Notifications are blocked for this page.");
     expect((await recorded(page)).shown).toEqual([]);
+});
+
+test("the alert button keeps keyboard focus while the browser asks for permission", async ({ page }) => {
+    await page.addInitScript(recordNotifications, recorder({ answer: "granted", hold: true }));
+    await page.goto(mainServer.url);
+    await waitForDashboard(page);
+    const toggle = page.locator("#alerts-toggle");
+    await toggle.focus();
+    await page.keyboard.press("Enter");
+
+    // While the browser asks: marked disabled for assistive technology (aria-disabled), but not
+    // natively disabled, which would drop focus to the page.
+    await expect(page.locator("#alerts-status")).toHaveText("Waiting for the browser's permission…");
+    // Chromium moves focus off a disabled element at its next rendering update, so look after two frames.
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(toggle).toBeFocused();
+    await expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(await toggle.evaluate((b) => b instanceof HTMLButtonElement && b.disabled)).toBe(false);
+    // Pressing again while it waits asks nothing more.
+    await page.keyboard.press("Enter");
+
+    await page.evaluate(() => {
+        (window as unknown as { e2eAnswerPermission: () => void }).e2eAnswerPermission();
+    });
+    await expect(page.locator("#alerts-state")).toHaveText("On");
+    await expect(toggle).toHaveText("Turn off alerts");
+    await expect(toggle).not.toHaveAttribute("aria-disabled");
+    await expect(toggle).toBeFocused();
+    expect((await recorded(page)).requests).toBe(1);
+});
+
+test("turning alerts on and off, and their options, reach every open dashboard tab", async ({ context }) => {
+    // Both tabs have permission already, so the stored choices alone decide what they show.
+    await context.addInitScript(recordNotifications, recorder({ initial: "granted" }));
+    const errors: string[] = [];
+    const first = await context.newPage();
+    const second = await context.newPage();
+    for (const page of [first, second]) {
+        page.on("pageerror", (error) => errors.push(error.message));
+        await page.goto(mainServer.url);
+        await waitForDashboard(page);
+        await expect(page.locator("#alerts-state")).toHaveText("Off");
+    }
+
+    await first.getByRole("button", { name: "Turn on alerts" }).click();
+    await expect(first.locator("#alerts-state")).toHaveText("On");
+    await expect(second.locator("#alerts-state")).toHaveText("On");
+    await expect(second.getByRole("button", { name: "Turn off alerts" })).toBeVisible();
+
+    await first.getByLabel("Lead time").selectOption("15");
+    await first.getByLabel("Visible passes only").uncheck();
+    await expect(second.getByLabel("Lead time")).toHaveValue("15");
+    await expect(second.getByLabel("Visible passes only")).not.toBeChecked();
+    await expect(second.locator("#alerts-status")).toContainText("15 min before ISS (ZARYA) rises at");
+
+    await second.getByRole("button", { name: "Turn off alerts" }).click();
+    await expect(second.locator("#alerts-state")).toHaveText("Off");
+    await expect(first.locator("#alerts-state")).toHaveText("Off");
+    await expect(first.getByRole("button", { name: "Turn on alerts" })).toBeVisible();
+    expect(errors).toEqual([]);
 });

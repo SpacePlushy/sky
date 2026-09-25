@@ -11,7 +11,7 @@ import { byId, h, setText } from "./dom";
 import { WorldMap } from "./map";
 import type { Config, Now, Passes, SatelliteSummary, Track } from "./model";
 import { PassList } from "./passlist";
-import { selectedPass, passStatus } from "./passes";
+import { hasVisiblePass, selectedPass, passStatus } from "./passes";
 import { SkyPlot } from "./skyplot";
 import { Telemetry } from "./telemetry";
 import { ServerClock, zoneFormat, type ZoneFormat } from "./time";
@@ -25,8 +25,11 @@ const refresh = {
 
 const passDays = 7;
 
-/** The calendar export the pass panel links to; the link's text states the same days and alarm. */
-const calendarOptions = { days: 7, visibleOnly: true, alarmMinutes: 10 } as const;
+/**
+ * The calendar export the pass panel links to. The link's text and the notes beside it in
+ * index.html state the same days and alarm, and the days match the pass list's.
+ */
+const calendarOptions = { days: passDays, visibleOnly: true, alarmMinutes: 10 } as const;
 
 type Source = "config" | "satellites" | "now" | "track" | "passes";
 
@@ -83,6 +86,10 @@ export class App {
     private readonly skyPlot: SkyPlot;
     private readonly alerts = new AlertControl();
     private readonly calendarLink = byId("calendar-link", HTMLAnchorElement);
+    private readonly calendarOffer = byId("calendar-offer", HTMLElement);
+    private readonly calendarNone = byId("calendar-none", HTMLElement);
+    /** The selected satellite's calendar path, or null when it cannot have one. */
+    private calendarHref: string | null = null;
     private readonly select = byId("satellite", HTMLSelectElement);
     private readonly observerName = byId("observer-name", HTMLElement);
     private readonly localClock = byId("clock-local", HTMLElement);
@@ -193,11 +200,11 @@ export class App {
         url.searchParams.set("sat", String(id));
         history.replaceState(null, "", url);
         try {
-            this.calendarLink.href = calendarPath(id, calendarOptions);
-            this.calendarLink.hidden = false;
+            this.calendarHref = calendarPath(id, calendarOptions);
+            this.calendarLink.href = this.calendarHref;
         } catch {
+            this.calendarHref = null;
             this.calendarLink.removeAttribute("href");
-            this.calendarLink.hidden = true;
         }
         this.renderAll();
         void this.pollNow();
@@ -403,7 +410,25 @@ export class App {
             minimumElevationDeg: this.config?.minimumElevationDeg ?? 0,
             error: this.errors.has("passes"),
         });
+        this.renderCalendar(nowMs);
         this.renderSkyPlot();
+    }
+
+    /**
+     * The calendar link, offered only when the listed passes have a visible part: the API has no
+     * file otherwise (it answers 404). Nothing shows while the passes load or after the last
+     * request for them failed; with the list loaded and nothing visible, a note says so instead.
+     */
+    private renderCalendar(nowMs: number): void {
+        const passes = this.errors.has("passes") || this.calendarHref === null ? null : this.passes;
+        const offer = passes !== null && hasVisiblePass(passes.passes, nowMs);
+        const none = passes !== null && !offer;
+        if (this.calendarOffer.hidden === offer) {
+            this.calendarOffer.hidden = !offer;
+        }
+        if (this.calendarNone.hidden === none) {
+            this.calendarNone.hidden = !none;
+        }
     }
 
     private renderSkyPlot(): void {

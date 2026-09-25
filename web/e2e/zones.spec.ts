@@ -39,10 +39,17 @@ test("shows America/Phoenix times in a browser set to Asia/Tokyo and de-DE", asy
         });
     }).toPass({ timeout: 15_000 });
 
-    const selected = page.locator('button.pass[aria-pressed="true"]');
-    const rise = Number(await selected.getAttribute("data-rise"));
-    const { date, clock } = phoenix(Math.round(rise / 1000) * 1000);
-    await expect(page.locator("#sky-caption")).toContainText(`${date}: rises ${clock}`);
+    // The plotted pass and the caption, read from one rendering: the pass plotted by default can
+    // change between two reads, when the pass in progress at the server's start ends 63 s in.
+    await expect(async () => {
+        const shown = await page.evaluate(() => ({
+            rise: Number(document.querySelector('button.pass[aria-pressed="true"]')?.getAttribute("data-rise")),
+            caption: document.getElementById("sky-caption")?.textContent ?? "",
+        }));
+        expect(Number.isFinite(shown.rise) && shown.rise > 0, "a pass is plotted").toBe(true);
+        const { date, clock } = phoenix(Math.round(shown.rise / 1000) * 1000);
+        expect(shown.caption).toContain(`${date}: rises ${clock}`);
+    }).toPass({ timeout: 15_000 });
     // Not the German or Japanese forms of that date.
     await expect(page.locator("#sky-caption")).not.toContainText(/Do\.|Fr\.|月|日/);
 });
