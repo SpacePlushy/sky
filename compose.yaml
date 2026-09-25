@@ -1,0 +1,27 @@
+# One command: `docker compose up --build`, then open http://localhost:8080.
+#
+# By default the dashboard shows recorded data from 2026-09-24 on a clock started then, with no
+# network access. For live data, fetch it with the CLI on this machine (`sky passes`), then point
+# the container at the CLI's cache folder and clear the simulated clock:
+#
+#   SKY_CACHE_DIR="$HOME/Library/Application Support/sky/celestrak" SKY_CLOCK_START= docker compose up --build
+#
+# (On Linux the folder is ~/.local/share/sky/celestrak.) The container only reads that folder;
+# the CLI stays the one process that talks to CelesTrak. Your real location goes in a gitignored
+# .env.observer file as SKY_Observer__* variables; it is read at run time, never built into the image.
+services:
+  sky:
+    build: .
+    image: sky-over-phoenix:local
+    ports:
+      - "127.0.0.1:8080:8080" # this machine only
+    environment:
+      SKY_CelesTrak__Offline: "true" # fixed: the container never requests
+      SKY_CelesTrak__CacheDirectory: /data/celestrak
+      SKY_Clock__StartUtc: ${SKY_CLOCK_START-2026-09-24T04:00:00Z}
+    env_file:
+      - path: .env.observer
+        required: false
+    volumes:
+      - ${SKY_CACHE_DIR:-./deploy/demo-cache}:/data/celestrak:ro
+    restart: unless-stopped

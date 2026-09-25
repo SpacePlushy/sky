@@ -1,0 +1,17 @@
+# Private and machine-specific files never enter the build context.
+**/appsettings.Local.json
+**/*.local.json
+.env
+.env.*
+
+# Build output and dependencies are rebuilt inside the image.
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/TestResults
+test-results
+playwright-report
+blob-report
+tools/reference/.cache
+.git
