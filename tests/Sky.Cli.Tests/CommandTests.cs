@@ -364,6 +364,31 @@ public sealed partial class CommandTests : IDisposable
         Assert.Empty(_cli.Requests);
     }
 
+    [Fact]
+    public async Task Offline_mode_never_requests_and_explains_an_empty_cache()
+    {
+        _cli.WriteLocal(System.Text.Json.JsonSerializer.Serialize(new { CelesTrak = new { Groups = "stations", CacheDirectory = _cli.CacheDirectory, Offline = true } }));
+
+        int exit = await _cli.RunAsync("passes");
+
+        Assert.Equal(1, exit);
+        Assert.Empty(_cli.Requests);
+        Assert.Contains("Offline mode", _cli.Error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Offline_mode_uses_data_cached_earlier()
+    {
+        await _cli.RunAsync("passes");
+        _cli.WriteLocal(System.Text.Json.JsonSerializer.Serialize(new { CelesTrak = new { Groups = "stations", CacheDirectory = _cli.CacheDirectory, Offline = true } }));
+        _cli.Clock.Advance(TimeSpan.FromHours(12)); // due for a refresh, which offline mode must not make
+
+        int exit = await _cli.RunAsync("passes");
+
+        Assert.Equal(0, exit);
+        Assert.Single(_cli.Requests);
+    }
+
     private static double Number(JsonElement e) => e.GetDouble();
 
     /// <summary>Reads a labeled number such as "azimuth 99.08" from the output.</summary>

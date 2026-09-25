@@ -35,21 +35,21 @@ internal static class SkyCli
             PassesAsync(context, new PassesRequest(parse.GetValue(satellite), parse.GetValue(refresh), parse.GetValue(count), parse.GetValue(days), parse.GetValue(minimumElevation), parse.GetValue(visibleOnly)), token)));
 
         var unblock = new Command("unblock", "Allow requests to a CelesTrak group again, after checking why it was blocked.") { group };
-        unblock.SetAction((parse, _) => ExecuteAsync(environment, context =>
+        unblock.SetAction((parse, _) => ExecuteAsync(environment, async context =>
         {
             string name = parse.GetValue(group)!;
             try
             {
-                context.Cache.ClearBlock(name);
+                await context.Cache.ClearBlockAsync(name, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (ArgumentException ex)
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
             {
-                environment.Error.WriteLine(ex.Message);
-                return Task.FromResult(1);
+                await environment.Error.WriteLineAsync(ex.Message).ConfigureAwait(false);
+                return 1;
             }
 
-            environment.Out.WriteLine($"Requests for GROUP={name} are allowed again, subject to the 2-hour rule.");
-            return Task.FromResult(0);
+            await environment.Out.WriteLineAsync($"Requests for GROUP={name} are allowed again, subject to the 2-hour rule.").ConfigureAwait(false);
+            return 0;
         }));
 
         var root = new RootCommand("Sky: satellite position, passes, and visibility over an observer.") { now, passes, unblock };
@@ -85,9 +85,13 @@ internal static class SkyCli
             return 1;
         }
 
-        using var http = environment.CreateHttpClient();
-        using var cache = new GpCache(settings.CacheDirectory, new CelesTrakClient(http), environment.Time);
-        return await command(new CommandContext(environment, settings, cache)).ConfigureAwait(false);
+        // A configured start instant moves the clock there, running at real speed from launch.
+        CliEnvironment env = settings.ClockStartUtc is { } startUtc
+            ? environment with { Time = new StartedClock(environment.Time, startUtc) }
+            : environment;
+        using var http = env.CreateHttpClient();
+        using var cache = new GpCache(settings.CacheDirectory, new CelesTrakClient(http), env.Time, settings.Offline);
+        return await command(new CommandContext(env, settings, cache)).ConfigureAwait(false);
     }
 
     private static async Task<int> NowAsync(CommandContext context, long catalogNumber, bool refresh, CancellationToken token)

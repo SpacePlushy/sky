@@ -14,17 +14,30 @@ namespace Sky.CelesTrak;
 /// <item>No group is requested within 2 hours of its last request, even when a refresh is forced.</item>
 /// <item>
 /// Any HTTP answer other than a 200 with valid element sets blocks the group until a person
-/// calls <see cref="ClearBlock"/>. CelesTrak requires automated clients to stop on any non-200
+/// calls <see cref="ClearBlockAsync"/>. CelesTrak requires automated clients to stop on any non-200
 /// response and report it; 50 errors in 2 hours firewalls the IP address.
 /// </item>
 /// <item>When CelesTrak cannot be reached at all, retries back off from 2 hours, doubling to 24.</item>
 /// <item>A response replaces cached data only after it validates, and files are replaced by rename.</item>
 /// </list>
 /// State lives on disk, so the rules hold across restarts. One instance serializes its own
-/// requests; separate processes sharing a directory are not coordinated.
+/// requests with a semaphore, and instances in different processes sharing a directory, such as the
+/// CLI and the dashboard, serialize theirs with an exclusive lock on a <c>.lock</c> file there, held
+/// from reading the request history to writing it back. The operating system releases the lock if a
+/// process dies, so a crash cannot leave it stuck.
+/// <para>
+/// In offline mode the cache only reads: it never contacts CelesTrak, never writes, and takes no
+/// lock, so a read-only folder works. Tests, demonstrations, and screenshots use it.
+/// </para>
 /// </remarks>
-public sealed partial class GpCache(string directory, CelesTrakClient client, TimeProvider time) : IDisposable
+/// <param name="directory">The cache folder.</param>
+/// <param name="client">The CelesTrak client.</param>
+/// <param name="time">The clock.</param>
+/// <param name="offline">Serve cached data only, never contacting CelesTrak.</param>
+public sealed partial class GpCache(string directory, CelesTrakClient client, TimeProvider time, bool offline = false) : IDisposable
 {
+    private static readonly TimeSpan LockPollInterval = TimeSpan.FromMilliseconds(100);
+
     private static readonly TimeSpan RefreshAge = TimeSpan.FromHours(6);
     private static readonly TimeSpan MinimumInterval = TimeSpan.FromHours(2);
     private static readonly TimeSpan MaximumBackoff = TimeSpan.FromHours(24);
@@ -40,9 +53,15 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     public async Task<GpCacheResult> GetGroupAsync(string group, CancellationToken cancellationToken, bool forceRefresh = false)
     {
         ValidateGroup(group);
+        if (offline)
+        {
+            return GetGroupOffline(group);
+        }
+
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using FileStream processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false);
             return await GetGroupCoreAsync(group, forceRefresh, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -52,14 +71,68 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     }
 
     /// <summary>Clears a block left by a CelesTrak error, after a person has looked at it.</summary>
-    public void ClearBlock(string group)
+    /// <exception cref="InvalidOperationException">The cache is offline, so it never writes.</exception>
+    public async Task ClearBlockAsync(string group, CancellationToken cancellationToken)
     {
         ValidateGroup(group);
-        State state = LoadState(group, []);
-        if (state.Blocked is not null)
+        if (offline)
         {
-            SaveState(group, state with { Blocked = null });
+            throw new InvalidOperationException("The cache is in offline mode and never writes; turn CelesTrak:Offline off to clear a block.");
         }
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            using FileStream processLock = await AcquireProcessLockAsync(cancellationToken).ConfigureAwait(false);
+            State state = LoadState(group, []);
+            if (state.Blocked is not null)
+            {
+                SaveState(group, state with { Blocked = null });
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Waits for the exclusive lock that coordinates processes sharing the folder. FileShare.None is
+    /// an exclusive flock on Linux and macOS and a sharing lock on Windows; both conflict with any
+    /// other open of the file with FileShare.None, in this process or another.
+    /// </summary>
+    private async Task<FileStream> AcquireProcessLockAsync(CancellationToken cancellationToken)
+    {
+        System.IO.Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, ".lock");
+        while (true)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException)
+            {
+                // Held by another process or instance: wait on the real clock, not the injected one,
+                // since the holder's progress does not depend on this instance's notion of time.
+                await Task.Delay(LockPollInterval, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private GpCacheResult GetGroupOffline(string group)
+    {
+        DateTimeOffset now = time.GetUtcNow();
+        var warnings = new List<string>();
+        IReadOnlyList<GpRecord>? cached = LoadCachedRecords(group, warnings);
+        if (cached is null)
+        {
+            warnings.Add($"Offline mode: nothing is cached for GROUP={group}, and CelesTrak is not contacted.");
+            return new GpCacheResult { Group = group, Records = [], Source = GpDataSource.None, Warnings = warnings };
+        }
+
+        State state = LoadState(group, warnings);
+        return Result(group, cached, GpDataSource.Cache, state.DownloadedUtc, now, warnings);
     }
 
     /// <inheritdoc />

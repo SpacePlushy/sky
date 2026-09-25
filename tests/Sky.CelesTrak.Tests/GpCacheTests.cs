@@ -125,7 +125,7 @@ public sealed class GpCacheTests : IDisposable
         // A person clears the block; the next request is allowed.
         _server.Respond(HttpStatusCode.OK, Stations);
         var cache = NewCache();
-        cache.ClearBlock("stations");
+        await cache.ClearBlockAsync("stations", TestContext.Current.CancellationToken);
         var recovered = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
         Assert.Equal(3, _server.Requests.Count);
         Assert.Equal(GpDataSource.Downloaded, recovered.Source);
@@ -259,7 +259,7 @@ public sealed class GpCacheTests : IDisposable
 
         _server.Respond(HttpStatusCode.OK, Stations);
         var cache = NewCache();
-        cache.ClearBlock("stations");
+        await cache.ClearBlockAsync("stations", TestContext.Current.CancellationToken);
         var recovered = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
         Assert.Single(_server.Requests);
         Assert.Equal(GpDataSource.Downloaded, recovered.Source);
@@ -272,7 +272,7 @@ public sealed class GpCacheTests : IDisposable
         // the last request.
         await WriteUnreadableStateAsync(writtenAt: Start - TimeSpan.FromMinutes(30));
         var cache = NewCache();
-        cache.ClearBlock("stations");
+        await cache.ClearBlockAsync("stations", TestContext.Current.CancellationToken);
 
         await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
         Assert.Empty(_server.Requests);
@@ -333,7 +333,7 @@ public sealed class GpCacheTests : IDisposable
         Assert.Equal(3, _server.Requests.Count);
 
         var cache = NewCache();
-        cache.ClearBlock("stations");
+        await cache.ClearBlockAsync("stations", TestContext.Current.CancellationToken);
         _clock.Advance(TimeSpan.FromHours(2));
         _server.Respond(HttpStatusCode.OK, Stations);
         var recovered = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
@@ -403,5 +403,57 @@ public sealed class GpCacheTests : IDisposable
         using var handler = CelesTrakClient.CreateHandler();
 
         Assert.False(handler.AllowAutoRedirect);
+    }
+
+    [Fact]
+    public async Task Two_caches_sharing_a_folder_make_one_request_between_them()
+    {
+        // The CLI and the dashboard are separate processes that can share one cache folder. Two
+        // instances stand in for them here: the file lock must stop the second from requesting while
+        // the first's request is in flight, and it must then find the fresh data and not request.
+        _server.Respond(HttpStatusCode.OK, Stations).Delay = TimeSpan.FromMilliseconds(300);
+        using var first = NewCache();
+        using var second = NewCache();
+
+        var results = await Task.WhenAll(
+            first.GetGroupAsync("stations", TestContext.Current.CancellationToken),
+            second.GetGroupAsync("stations", TestContext.Current.CancellationToken));
+
+        Assert.Single(_server.Requests);
+        Assert.All(results, r => Assert.Equal(22, r.Records.Count));
+        Assert.Contains(results, r => r.Source == GpDataSource.Downloaded);
+        Assert.Contains(results, r => r.Source == GpDataSource.Cache);
+    }
+
+    [Fact]
+    public async Task Offline_mode_serves_the_cache_and_never_requests_even_when_data_is_due()
+    {
+        _server.Respond(HttpStatusCode.OK, Stations);
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        var stateBefore = File.ReadAllText(Path.Combine(_directory, "stations.state.json"));
+
+        _clock.Advance(TimeSpan.FromDays(3));
+        using var offline = new GpCache(_directory, new CelesTrakClient(new HttpClient(_server)), _clock, offline: true);
+        var result = await offline.GetGroupAsync("stations", TestContext.Current.CancellationToken, forceRefresh: true);
+
+        Assert.Single(_server.Requests); // only the online download above
+        Assert.Equal(GpDataSource.Cache, result.Source);
+        Assert.Equal(22, result.Records.Count);
+        Assert.Equal(stateBefore, File.ReadAllText(Path.Combine(_directory, "stations.state.json")));
+    }
+
+    [Fact]
+    public async Task Offline_mode_with_nothing_cached_says_so_and_writes_nothing()
+    {
+        using var offline = new GpCache(_directory, new CelesTrakClient(new HttpClient(_server)), _clock, offline: true);
+
+        var result = await offline.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+        Assert.Empty(_server.Requests);
+        Assert.Empty(result.Records);
+        Assert.Equal(GpDataSource.None, result.Source);
+        Assert.Contains(result.Warnings, w => w.Contains("Offline mode", StringComparison.Ordinal));
+        Assert.False(Directory.Exists(_directory), "Offline mode must not create or write the cache folder.");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => offline.ClearBlockAsync("stations", TestContext.Current.CancellationToken));
     }
 }
