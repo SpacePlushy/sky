@@ -193,19 +193,28 @@ fails any request.
 | `/passes`: every pass, visible part, and sky-path point | `PassFinder` and `Visibility`, directly | Equal to the millisecond | Equal |
 | Sky path | Rise to set, at most 10 s apart, every 10 s step present, each visible part's ends included | Exact | Exact |
 | `/track` | The core's subpoint at each reported time; one orbit either side; 30 s spacing | 10⁻¹²° | Within |
-| Every time in JSON | UTC with a Z, at most three fractional digits, values computed at exactly that time | Exact | Exact |
+| Every time in JSON | UTC with a Z, at most three fractional digits; `/now`, track, and sky-path values computed at exactly the reported millisecond, including from a clock with sub-millisecond ticks and a thinned track; rise, peak, set, and visible-part ends are root-found and reported truncated to the millisecond | Exact | Exact |
+| Sky-path points and track sunlight | The core's azimuth, elevation, and sunlit flag at each point's time | 10⁻¹²° | Exact |
+| Footprint fields in `/now` | The footprint formula at the reported height, for 0° and the minimum | 10⁻¹²° | Exact |
+| Element-set choice | Two groups where "newest overall" and "first group holding it" differ: the API takes the CLI's rule | Exact | Exact |
+| A request the browser aborts mid-download | The shared download finishes and serves the next request; one CelesTrak request in all | Exact | Exact |
+| `?at=` far from the epoch | 400 problem details within 30 days of the epoch, never a crash at DateTimeOffset's limits; age warnings are for `at` | Exact | Exact |
+| A foreign `Host` header | 400: only loopback names are accepted, so a DNS-rebinding page cannot read the observer's location | Exact | Exact |
+| Invalid settings | The API process exits with code 1 and the settings message, not a crash | Exact | Exact |
 | Errors | 404, 400, and 503 as RFC 9457 problem details, never a stack trace | Exact | Exact |
 
 ### Cache coordination and offline mode (Milestone 3)
 
 | Check | How |
 |---|---|
-| Two caches, one folder, released together | One CelesTrak request between them; fails with the lock removed |
+| Another process holding the lock | The cache waits, then serves what that process downloaded, with no request; fails with the lock removed |
+| A 403 whose body is cut off by cancellation | Still recorded as a block, so the group is never requested again without a person; fails if the cancellation wins |
+| A lock wait that timed out | Later calls try once and do not wait again, so a stuck holder costs one timeout |
 | A lock held too long by another process | After the timeout, cached data with a warning and no request; unblock refuses |
 | Offline with data due for refresh | No request, and the request history is byte for byte unchanged |
 | Offline with nothing cached | No request, no folder created, an explanatory warning |
 | A simulated clock | Allowed only with offline mode, so it never reaches the request history |
-| The Docker image | CI plants a private settings file with a sentinel value, builds the image, and checks the sentinel is nowhere in it; then runs the container offline and checks the API and page answer |
+| The Docker image | CI plants private files with a sentinel value (`appsettings.Local.json`, `web/.env.local`), builds the image, and scans the exported filesystem of the image and of the web build stage, requiring grep's "not found" status exactly; then runs the container offline and checks the API and page answer |
 
 ### CelesTrak data and policy
 
@@ -222,7 +231,7 @@ The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 | Check | How |
 |---|---|
 | Settings | Out-of-range values, Windows time-zone IDs, and unknown keys such as `Observer:Latitude` are rejected with a message; unknown keys list the known ones |
-| Relative `CelesTrak:CacheDirectory` | Resolves against the settings folder, never the working directory, so every run shares one request history and one 2-hour rule |
+| Relative `CelesTrak:CacheDirectory` | Resolves against the per-user sky folder, never the working directory or a program's own folder, so the CLI and the API share one request history and one 2-hour rule (changed in Milestone 3; the settings folder differed between them) |
 | `--min-elevation` | Parsed with the invariant culture: `30.5` means the same under a German locale, and `1,5`, `NaN`, and values outside 0 to below 90 are errors |
 | Daylight-saving zones | When the offset changes inside the window, every printed time carries its UTC offset; checked in `America/Denver` across the November change |
 | Fractional clock | A clock at 05:00:02.332 does not shift printed times: rise, peak, and set are root-found and printed to the nearest second, each within 0.5 s of Skyfield over 5 passes (the first rise, 05:32:22.132 UTC, prints as 22:32:22 Phoenix time) |

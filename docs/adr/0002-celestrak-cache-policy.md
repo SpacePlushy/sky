@@ -26,7 +26,7 @@ request per call and never retries.
 | Timeouts | 30 s for the status and headers, then 30 s more for the body |
 | Redirects | Not followed, so a 301 surfaces as an error |
 | Writes | Only validated responses are written, via a temporary file and rename |
-| State | On disk next to the data, so the rules hold across restarts. A relative cache directory resolves against the settings folder, so every run shares one state. |
+| State | On disk next to the data, so the rules hold across restarts. A relative cache directory resolves against the per-user sky folder, not a program's own folder, so the CLI and the dashboard share one state. |
 | Unreadable state file | Treated as blocked, since it may have recorded a block, with its modification time as the last request |
 | Clock moved back | A last request recorded in the future counts from now and is saved, so the group is not locked out until that date. Data downloaded in the future counts as due. |
 | Stale data | Warn when the newest epoch is over 3 days old |

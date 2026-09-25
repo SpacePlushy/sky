@@ -38,5 +38,5 @@ never reach the request history.
 - `docker compose up` works anywhere with no network and cannot break CelesTrak's rules.
 - Live data in the container needs one CLI run on the host first, and another when the data ages.
 - The image contains no observer location: `.dockerignore` excludes the local settings file, the
-  API never publishes it, and CI checks the image for a planted sentinel. A real location reaches
+  API never publishes it, and CI plants sentinel files and scans the exported image and build stage for them. A real location reaches
   the container only at run time, from a gitignored `.env.observer` file.
