@@ -97,6 +97,25 @@ public sealed class SettingsTests : IDisposable
         Assert.Equal(expected, second.CacheDirectory);
     }
 
+    [Theory]
+    [InlineData("")]           // no per-user data folder at all
+    [InlineData("relative")]   // one that is not an absolute path
+    public void With_no_per_user_folder_an_absolute_cache_directory_still_works(string localApplicationData)
+    {
+        // A container's app user can have no home folder. An absolute CacheDirectory must not need
+        // one; this crashed the Docker image once. A relative path or the default does, and says so.
+        string absolute = Path.Combine(Path.GetTempPath(), "sky-absolute-cache");
+        _cli.WriteLocal(System.Text.Json.JsonSerializer.Serialize(new { CelesTrak = new { CacheDirectory = absolute } }));
+        Assert.Equal(absolute, SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix, localApplicationData).CacheDirectory);
+
+        _cli.WriteLocal("""{"CelesTrak":{"CacheDirectory":"cache-relative"}}""");
+        var relative = Assert.Throws<SettingsException>(() => SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix, localApplicationData));
+        Assert.Contains("CelesTrak:CacheDirectory must be an absolute path", relative.Message, StringComparison.Ordinal);
+
+        _cli.WriteLocal("{}");
+        Assert.Throws<SettingsException>(() => SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix, localApplicationData));
+    }
+
     [Fact]
     public void Phoenix_times_use_the_zone_rules_not_a_fixed_offset()
     {

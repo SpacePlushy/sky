@@ -42,7 +42,11 @@ public sealed partial record SkySettings(
 
     /// <summary>Loads and validates settings, reporting every problem at once.</summary>
     /// <exception cref="SettingsException">A setting is missing or invalid.</exception>
-    public static SkySettings Load(string settingsDirectory, string environmentPrefix)
+    public static SkySettings Load(string settingsDirectory, string environmentPrefix) =>
+        Load(settingsDirectory, environmentPrefix, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+
+    /// <summary>As <see cref="Load(string, string)"/>, with the per-user data folder given (tests vary it).</summary>
+    internal static SkySettings Load(string settingsDirectory, string environmentPrefix, string localApplicationData)
     {
         IConfiguration config;
         try
@@ -95,13 +99,28 @@ public sealed partial record SkySettings(
             throw new SettingsException("Invalid settings:" + Environment.NewLine + string.Join(Environment.NewLine, problems.Select(p => "  " + p)));
         }
 
-        // A relative directory resolves against the per-user sky folder, never the working directory
-        // or a program's own folder: the CLI and the API read the same settings from different
-        // folders, and must share one request history and one 2-hour rule.
-        string skyFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sky");
-        string cacheDirectory = string.IsNullOrWhiteSpace(config["CelesTrak:CacheDirectory"])
-            ? Path.Combine(skyFolder, "celestrak")
-            : Path.GetFullPath(config["CelesTrak:CacheDirectory"]!, skyFolder);
+        // An absolute directory is used as given. A relative one resolves against the per-user sky
+        // folder, never the working directory or a program's own folder: the CLI and the API read
+        // the same settings from different folders, and must share one request history and one
+        // 2-hour rule. A user with no per-user data folder (a container's app user, for one) must
+        // give an absolute path.
+        string? configured = string.IsNullOrWhiteSpace(config["CelesTrak:CacheDirectory"]) ? null : config["CelesTrak:CacheDirectory"];
+        string cacheDirectory;
+        if (configured is not null && Path.IsPathFullyQualified(configured))
+        {
+            cacheDirectory = Path.GetFullPath(configured);
+        }
+        else if (Path.IsPathFullyQualified(localApplicationData))
+        {
+            string skyFolder = Path.Combine(localApplicationData, "sky");
+            cacheDirectory = configured is null ? Path.Combine(skyFolder, "celestrak") : Path.GetFullPath(configured, skyFolder);
+        }
+        else
+        {
+            throw new SettingsException(
+                "Invalid settings:" + Environment.NewLine +
+                "  CelesTrak:CacheDirectory must be an absolute path: this user has no per-user data folder for the default or a relative path to resolve against.");
+        }
 
         return new SkySettings(name, new Geodetic(latitude, longitude, heightMeters / 1000.0), zone!, groups, cacheDirectory, minimumElevation)
         {

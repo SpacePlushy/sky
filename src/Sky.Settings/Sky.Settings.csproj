@@ -15,4 +15,8 @@
     <ProjectReference Include="..\Sky.Orbital\Sky.Orbital.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Sky.Cli.Tests" />
+  </ItemGroup>
+
 </Project>
