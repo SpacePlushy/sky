@@ -7,8 +7,8 @@ namespace Sky.CelesTrak.Tests;
 /// <summary>
 /// The pass finder's per-pass peak uncertainty, checked on real CelesTrak element sets including the
 /// lowest orbit in the stations group, with elements up to 29 days old (the CLI searches up to 30
-/// days ahead). Each case is an exactly overhead pass with the peak midway between 0.1 s samples,
-/// the worst case for the refinement.
+/// days ahead). Each case is an exactly overhead pass, where elevation has a corner at 90 degrees:
+/// the worst case for the minimizer.
 /// </summary>
 public class PassUncertaintyTests
 {
@@ -35,10 +35,11 @@ public class PassUncertaintyTests
         var observer = new TopocentricFrame(subpoint with { HeightKm = 0 });
         var start = t0.AddTicks(-(long)Math.Round(1800.05 * TimeSpan.TicksPerSecond));
 
-        var pass = CoarsePassFinder.Find(propagator, observer, start, start.AddHours(1), 10.0).Passes
+        var pass = PassFinder.Find(propagator, observer, start, start.AddHours(1), 10.0).Passes
             .Single(p => Math.Abs((p.Culmination.Time - t0).TotalSeconds) < 1);
 
         double shortfall = 90.0 - pass.Culmination.ElevationDegrees;
-        Assert.InRange(shortfall, 0.02, pass.PeakElevationUncertaintyDegrees);
+        Assert.InRange(shortfall, 0.0, pass.PeakElevationUncertaintyDegrees);
+        Assert.InRange((pass.Culmination.Time - t0).TotalSeconds, -2.1e-4, 2.1e-4);
     }
 }
