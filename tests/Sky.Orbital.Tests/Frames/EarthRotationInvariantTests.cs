@@ -34,14 +34,14 @@ public class EarthRotationInvariantTests
     {
         // A point moving in a straight line in TEME, r(t) = r0 + v0 t, has TEME velocity exactly v0.
         // Differentiating its Earth-fixed position numerically must reproduce the analytic
-        // Earth-fixed velocity, including the sign and size of the Earth-rotation term. A
-        // fourth-order central difference with h = 1 s has no truncation error worth counting for
-        // this motion, and rounding contributes under 4e-9 km/s at 50,000 km, so the tolerance
-        // is 1e-8 km/s (0.01 mm/s). Using any rotation rate other than the rate of the GMST angle
-        // itself would show up here: Vallado's inertial rate is off by 7.1e-12 rad/s, or 3.5e-7 km/s
-        // at 50,000 km from the axis.
+        // Earth-fixed velocity, including the sign and size of the Earth-rotation term.
+        // Error budget for the fourth-order central difference, measured over 20,000 samples:
+        // h = 1 s gives 5.8e-9 km/s (GMST rounding at 50,000 km dominates), h = 10 s gives
+        // 5.0e-10, and h = 100 s gives 6.8e-9 (truncation dominates). With h = 10 s the 1e-8 km/s
+        // tolerance has a 20x margin. Using any rotation rate other than the rate of the GMST angle
+        // itself would fail: Vallado's inertial rate is off by 7.1e-12 rad/s, 3.5e-7 km/s here.
         var random = new Random(42);
-        const double h = 1.0;
+        const double h = 10.0;
         for (int i = 0; i < Samples; i++)
         {
             var r0 = RandomVector(random, 30_000);
