@@ -27,3 +27,7 @@ blob-report/
 **/appsettings.Local.json
 **/*.local.json
 .claude/settings.local.json
+
+# Python (tools/reference)
+__pycache__/
+*.pyc
