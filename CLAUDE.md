@@ -33,9 +33,11 @@ verification story must be strong enough to explain to a stranger.
    reference SGP4 (ADR 0001), TEME to Earth-fixed to geodetic and topocentric,
    and a CLI that prints the ISS position and next 5 passes (rise and set on a
    10 s grid, peaks refined to 0.1 s).
-2. **Pass prediction.** Rise, max elevation, and set with root-finding
-   refinement. Visibility means satellite sunlit and sun below -6 degrees at
-   the observer. Target accuracy is a few seconds against reference tools.
+2. **Pass prediction.** Built, in review. Plan: `docs/plans/milestone-2-proposal.md`.
+   Rise, max elevation, and set with root-finding refinement (Brent, 1 ms).
+   Visibility means satellite sunlit (WGS-84 ellipsoid shadow, Meeus Sun) and
+   sun below -6 degrees at the observer. Target accuracy is a few seconds
+   against reference tools; Heavens-Above agrees within a second.
 3. **Dashboard.** Live map with ground track, telemetry panel, 7-day pass
    table, polar sky plot. Dark mission-control look, mobile-friendly.
 4. **Alerts and polish.** Optional notifications, hiring-manager README,
@@ -97,7 +99,8 @@ dotnet format Sky.slnx --verify-no-changes        # lint; CI fails on any diff
 dotnet format Sky.slnx                            # fix formatting
 dotnet run --project src/Sky.Cli -- now           # ISS position now
 dotnet run --project src/Sky.Cli -- passes        # next 5 ISS passes
-uv run tools/reference/generate_skyfield_reference.py   # regenerate Skyfield data
+uv run tools/reference/generate_skyfield_reference.py              # regenerate Skyfield data
+uv run tools/reference/generate_skyfield_visibility_reference.py   # Sun, shadow, visibility (downloads DE421 once)
 ```
 
 The API, web app, and `docker compose up` arrive in Milestone 3.
@@ -108,6 +111,8 @@ The API, web app, and `docker compose up` arrive in Milestone 3.
   possible. Do not edit its math. Formatting and analyzers skip it on purpose.
   See its `NOTICE.md`.
 - `src/Sky.Orbital` is pure math: no I/O, no network, no clock access.
+  `Numerics` holds Brent's methods, `Astronomy` the Sun and the Earth's shadow,
+  and `Passes` the pass finder and visibility.
 - `src/Sky.CelesTrak` is OMM parsing, the HTTP client, and the policy cache
   (ADR 0002).
 - `src/Sky.Cli` is the `sky` command-line tool and its settings.

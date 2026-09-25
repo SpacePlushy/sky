@@ -8,8 +8,8 @@ It pulls orbital elements from [CelesTrak](https://celestrak.org), propagates
 orbits with SGP4, and shows where satellites are now, what's coming overhead
 next, and when it's worth going outside to look.
 
-> **Status:** Milestone 1 (orbital core) is complete and in review. It is a command-line
-> tool; the dashboard arrives in Milestone 3.
+> **Status:** Milestones 1 (orbital core) and 2 (pass prediction and visibility) are built and
+> in review. It is a command-line tool; the dashboard arrives in Milestone 3.
 
 ## Try it
 
@@ -19,6 +19,7 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download).
 dotnet test --solution Sky.slnx                        # every test runs offline
 dotnet run --project src/Sky.Cli -- now                # where the ISS is right now
 dotnet run --project src/Sky.Cli -- passes             # its next 5 passes over Phoenix
+dotnet run --project src/Sky.Cli -- passes --visible   # only the passes you can see
 dotnet run --project src/Sky.Cli -- passes --sat 48274 --count 3 --min-elevation 30
 ```
 
@@ -43,10 +44,13 @@ Correctness is checked at every step, against sources that share no code with Sk
   satisfy their defining properties across thousands of seeded random inputs.
 - **The full pipeline** matches Skyfield, an independent Python library, to under a
   millimeter and 10⁻¹⁰ degrees for the ISS over Phoenix.
-- **Pass predictions** match Skyfield's 25 passes over 7 days within the finder's stated
-  bounds: rise and set within 10 s, and peaks within 0.1 s and an elevation uncertainty the
-  finder computes for each pass. Milestone 2 replaces the 10 s rise and set grid with
-  root-finding.
+- **Pass predictions** match Skyfield's 25 passes over 7 days: rise and set within 0.23 ms and
+  peaks within 0.07 ms, found by Brent's method. Heavens-Above, run on the same element set,
+  agrees to within a second.
+- **Visibility** (satellite sunlit, Sun below −6°) uses a Sun that matches JPL's DE421 ephemeris
+  to 0.003° and an Earth's shadow on the WGS-84 ellipsoid. Shadow entry and exit match an
+  independent reference within 16 ms over a week, and civil twilight matches the U.S. Naval
+  Observatory's published times to the minute.
 
 These figures measure Sky's implementation of SGP4, not SGP4's physics. SGP4 itself is
 accurate to about a kilometer at the element set's epoch, and degrades by kilometers per day
