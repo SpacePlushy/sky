@@ -36,10 +36,12 @@ so it never downloads a group it does not need.
 
 ## Consequences
 
-- One process at a time cannot exceed CelesTrak's limits, even across restarts or interrupted
-  runs, and cannot silently accumulate errors. Two processes running at the same moment against
-  one cache directory could each make a request; see below.
+- No process can exceed CelesTrak's limits, even across restarts or interrupted runs, and none
+  can silently accumulate errors.
 - A CelesTrak outage that returns 5xx needs a person to run `sky unblock`. That is deliberate:
   the policy asks for a human in the loop on any non-200 answer.
-- Two processes sharing one cache directory are not coordinated. Milestone 3's server will run
-  a single cache.
+- Two processes sharing one cache directory on one filesystem, such as the CLI and the dashboard
+  API, are coordinated by an exclusive lock on a `.lock` file there (added in Milestone 3). A
+  process that cannot get the lock within 2 minutes serves cached data instead of requesting. The
+  lock does not reach across a container boundary, so the Docker image never requests at all;
+  see [ADR 0004](0004-offline-container.md).

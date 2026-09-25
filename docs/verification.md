@@ -177,6 +177,36 @@ satellite's magnitude, differs from this project's defined Sun-below-−6°.
 
 A week of passes with their visibility takes about 40 ms.
 
+### Dashboard API (Milestone 3)
+
+The API runs the orbital core unchanged. Its tests run the real host in memory, offline, on a fake
+clock at 2026-09-24 04:00 UTC with the recorded CelesTrak response, behind an HTTP handler that
+fails any request.
+
+| Check | Reference | Tolerance | Measured |
+|---|---|---|---|
+| `/now` subpoint and look angles | Skyfield, as the CLI test (UT1 = UTC allowance) | 10⁻⁸° latitude and longitude; the rotation bound for look angles | Within |
+| `/now` sunlit, Sun elevation, azimuth | The core, directly | 10⁻¹² | Exact |
+| `/now` during a pass | Skyfield's first pass | Rise and set within 1.1 ms | Within |
+| Subpoint of the Sun | DE421, via the Milestone 2 reference | 0.0115° | Within |
+| Footprint radius | Inverting the spherical geometry: an observer at that central angle sees the satellite at the stated elevation | 10⁻⁹° | Within |
+| `/passes`: every pass, visible part, and sky-path point | `PassFinder` and `Visibility`, directly | Equal to the millisecond | Equal |
+| Sky path | Rise to set, at most 10 s apart, every 10 s step present, each visible part's ends included | Exact | Exact |
+| `/track` | The core's subpoint at each reported time; one orbit either side; 30 s spacing | 10⁻¹²° | Within |
+| Every time in JSON | UTC with a Z, at most three fractional digits, values computed at exactly that time | Exact | Exact |
+| Errors | 404, 400, and 503 as RFC 9457 problem details, never a stack trace | Exact | Exact |
+
+### Cache coordination and offline mode (Milestone 3)
+
+| Check | How |
+|---|---|
+| Two caches, one folder, released together | One CelesTrak request between them; fails with the lock removed |
+| A lock held too long by another process | After the timeout, cached data with a warning and no request; unblock refuses |
+| Offline with data due for refresh | No request, and the request history is byte for byte unchanged |
+| Offline with nothing cached | No request, no folder created, an explanatory warning |
+| A simulated clock | Allowed only with offline mode, so it never reaches the request history |
+| The Docker image | CI plants a private settings file with a sentinel value, builds the image, and checks the sentinel is nowhere in it; then runs the container offline and checks the API and page answer |
+
 ### CelesTrak data and policy
 
 | Check | How |
@@ -197,6 +227,8 @@ The cache rules are in [ADR 0002](adr/0002-celestrak-cache-policy.md).
 | Daylight-saving zones | When the offset changes inside the window, every printed time carries its UTC offset; checked in `America/Denver` across the November change |
 | Fractional clock | A clock at 05:00:02.332 does not shift printed times: rise, peak, and set are root-found and printed to the nearest second, each within 0.5 s of Skyfield over 5 passes (the first rise, 05:32:22.132 UTC, prints as 22:32:22 Phoenix time) |
 | Cache wiring | `--refresh` and `sky unblock` checked end to end against the fake server |
+| Offline mode | No request with an empty cache, and cached data used when a refresh is due |
+| New settings | `CelesTrak:Offline`, `Dashboard:Satellites`, and `Clock:StartUtc` validated like the rest; the clock needs offline mode and a UTC instant ending in Z |
 
 ## Assumptions
 
