@@ -95,11 +95,13 @@ public sealed partial record SkySettings(
             throw new SettingsException("Invalid settings:" + Environment.NewLine + string.Join(Environment.NewLine, problems.Select(p => "  " + p)));
         }
 
-        // A relative directory resolves against the settings folder, never the working directory,
-        // so every run shares one request history and one 2-hour rule.
+        // A relative directory resolves against the per-user sky folder, never the working directory
+        // or a program's own folder: the CLI and the API read the same settings from different
+        // folders, and must share one request history and one 2-hour rule.
+        string skyFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sky");
         string cacheDirectory = string.IsNullOrWhiteSpace(config["CelesTrak:CacheDirectory"])
-            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sky", "celestrak")
-            : Path.GetFullPath(config["CelesTrak:CacheDirectory"]!, settingsDirectory);
+            ? Path.Combine(skyFolder, "celestrak")
+            : Path.GetFullPath(config["CelesTrak:CacheDirectory"]!, skyFolder);
 
         return new SkySettings(name, new Geodetic(latitude, longitude, heightMeters / 1000.0), zone!, groups, cacheDirectory, minimumElevation)
         {

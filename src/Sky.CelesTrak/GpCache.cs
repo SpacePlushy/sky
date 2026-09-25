@@ -53,6 +53,9 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
     /// </summary>
     internal TimeSpan LockTimeout { get; init; } = TimeSpan.FromMinutes(2);
 
+    // Set when a lock wait timed out; read and written only under _gate.
+    private bool _lockTimedOut;
+
     /// <summary>Gets the element sets for a group, downloading them only when the policy allows.</summary>
     /// <param name="group">A CelesTrak group name, such as "stations" or "visual".</param>
     /// <param name="cancellationToken">Cancels the wait or the download.</param>
@@ -128,20 +131,24 @@ public sealed partial class GpCache(string directory, CelesTrakClient client, Ti
         string path = Path.Combine(directory, ".lock");
 
         // The real clock, not the injected one: the holder's progress does not depend on this
-        // instance's notion of time.
+        // instance's notion of time. Once a wait has timed out, later calls try once and do not wait
+        // again until the lock has been taken, so a stuck holder costs one timeout, not one per call.
         var waited = System.Diagnostics.Stopwatch.StartNew();
         while (true)
         {
             try
             {
-                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                var stream = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+                _lockTimedOut = false;
+                return stream;
             }
-            catch (IOException) when (waited.Elapsed < LockTimeout)
+            catch (IOException) when (!_lockTimedOut && waited.Elapsed < LockTimeout)
             {
                 await Task.Delay(LockPollInterval, cancellationToken).ConfigureAwait(false);
             }
             catch (IOException)
             {
+                _lockTimedOut = true;
                 return null;
             }
         }

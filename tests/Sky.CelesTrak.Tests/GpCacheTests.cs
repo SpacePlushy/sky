@@ -406,23 +406,76 @@ public sealed class GpCacheTests : IDisposable
     }
 
     [Fact]
-    public async Task Two_caches_sharing_a_folder_make_one_request_between_them()
+    public async Task A_cache_waits_for_another_processs_lock_and_then_uses_what_it_downloaded()
     {
-        // The CLI and the dashboard are separate processes that can share one cache folder. Two
-        // instances stand in for them here: the file lock must stop the second from requesting while
-        // the first's request is in flight, and it must then find the fresh data and not request.
-        _server.Respond(HttpStatusCode.OK, Stations).Delay = TimeSpan.FromMilliseconds(300);
-        using var first = NewCache();
-        using var second = NewCache();
+        // The test plays the other process (the CLI, say): it holds the lock while it "downloads",
+        // writing the data and request history a finished download leaves. The cache must wait, not
+        // request, and then serve that data. Without the lock, it would request at once.
+        _server.Respond(HttpStatusCode.OK, Stations);
+        using var cache = NewCache();
+        Directory.CreateDirectory(_directory);
+        Task<GpCacheResult> pending;
+        using (new FileStream(Path.Combine(_directory, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            pending = cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+            Assert.Empty(_server.Requests);
+            Assert.False(pending.IsCompleted, "The cache did not wait for the lock.");
 
-        var results = await Task.WhenAll(
-            first.GetGroupAsync("stations", TestContext.Current.CancellationToken),
-            second.GetGroupAsync("stations", TestContext.Current.CancellationToken));
+            File.WriteAllText(Path.Combine(_directory, "stations.json"), Stations);
+            File.WriteAllText(Path.Combine(_directory, "stations.state.json"), System.Text.Json.JsonSerializer.Serialize(new
+            {
+                LastAttemptUtc = Start,
+                DownloadedUtc = Start,
+                NetworkFailures = 0,
+            }));
+        }
 
-        Assert.Single(_server.Requests);
-        Assert.All(results, r => Assert.Equal(22, r.Records.Count));
-        Assert.Contains(results, r => r.Source == GpDataSource.Downloaded);
-        Assert.Contains(results, r => r.Source == GpDataSource.Cache);
+        var result = await pending;
+
+        Assert.Empty(_server.Requests);
+        Assert.Equal(GpDataSource.Cache, result.Source);
+        Assert.Equal(22, result.Records.Count);
+    }
+
+    [Fact]
+    public async Task After_one_lock_timeout_later_calls_do_not_wait_again()
+    {
+        _server.Respond(HttpStatusCode.OK, Stations);
+        await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        _clock.Advance(TimeSpan.FromHours(7));
+
+        using (new FileStream(Path.Combine(_directory, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+        {
+            using var cache = new GpCache(_directory, new CelesTrakClient(new HttpClient(_server)), _clock) { LockTimeout = TimeSpan.FromSeconds(1) };
+            await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken); // waits out the timeout once
+
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            var result = await cache.GetGroupAsync("stations", TestContext.Current.CancellationToken);
+
+            Assert.True(watch.Elapsed < TimeSpan.FromMilliseconds(500), $"The second call waited {watch.Elapsed}.");
+            Assert.Equal(22, result.Records.Count);
+            Assert.Single(_server.Requests);
+        }
+    }
+
+    [Fact]
+    public async Task A_refusal_whose_body_is_cut_off_by_cancellation_still_blocks_the_group()
+    {
+        // The caller gives up while CelesTrak's 403 body is arriving. The status has already
+        // answered, so the block must be recorded: otherwise Sky would ask again, and each 403
+        // counts toward CelesTrak's firewall.
+        _server.RespondWithHangingBody(HttpStatusCode.Forbidden);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancel.CancelAfter(TimeSpan.FromMilliseconds(300));
+
+        var result = await NewCache().GetGroupAsync("stations", cancel.Token);
+
+        Assert.Contains(result.Warnings, w => w.Contains("HTTP 403", StringComparison.Ordinal));
+        _clock.Advance(TimeSpan.FromHours(7));
+        var later = await NewCache().GetGroupAsync("stations", TestContext.Current.CancellationToken);
+        Assert.Single(_server.Requests); // blocked: never asked again
+        Assert.Contains(later.Warnings, w => w.Contains("stopped requesting", StringComparison.Ordinal));
     }
 
     [Fact]

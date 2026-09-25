@@ -68,12 +68,22 @@ public sealed class CelesTrakClient(HttpClient httpClient)
                 string body = await response.Content.ReadAsStringAsync(bodyTimeout.Token).ConfigureAwait(false);
                 return new FetchOutcome.Answered(status, body);
             }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested
-                && ex is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
+            catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
             {
-                return status == 200
-                    ? new FetchOutcome.Unreachable($"The download was interrupted: {ex.Message}")
-                    : new FetchOutcome.Answered(status, $"(the response body could not be read: {ex.Message})");
+                // A non-200 status has arrived, so CelesTrak has answered: that answer must be
+                // recorded (and block the group) even if the caller cancelled while its body was
+                // read. Only a 200 whose body is lost is treated as unreachable, or as cancelled.
+                if (status != 200)
+                {
+                    return new FetchOutcome.Answered(status, $"(the response body could not be read: {ex.Message})");
+                }
+
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                return new FetchOutcome.Unreachable($"The download was interrupted: {ex.Message}");
             }
         }
     }

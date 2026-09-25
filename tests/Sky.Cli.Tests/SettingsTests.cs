@@ -79,15 +79,22 @@ public sealed class SettingsTests : IDisposable
     }
 
     [Fact]
-    public void A_relative_cache_directory_resolves_against_the_settings_folder()
+    public void A_relative_cache_directory_is_the_same_folder_for_every_program()
     {
-        // Resolving against the working directory would give each directory its own request history,
-        // so two runs from different folders could both request inside CelesTrak's 2-hour window.
+        // The CLI and the API read the same settings from their own folders. Resolving a relative
+        // path against either folder, or the working directory, would give each its own request
+        // history, so both could request inside CelesTrak's 2-hour window. It resolves against the
+        // per-user sky folder instead.
+        using var other = new CliHarness(new DateTimeOffset(2026, 9, 24, 4, 0, 0, TimeSpan.Zero));
         _cli.WriteLocal("""{"CelesTrak":{"CacheDirectory":"cache-relative"}}""");
+        other.WriteLocal("""{"CelesTrak":{"CacheDirectory":"cache-relative"}}""");
 
-        var settings = SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix);
+        var first = SkySettings.Load(_cli.SettingsDirectory, _cli.EnvironmentPrefix);
+        var second = SkySettings.Load(other.SettingsDirectory, other.EnvironmentPrefix);
 
-        Assert.Equal(Path.Combine(_cli.SettingsDirectory, "cache-relative"), settings.CacheDirectory);
+        string expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "sky", "cache-relative");
+        Assert.Equal(expected, first.CacheDirectory);
+        Assert.Equal(expected, second.CacheDirectory);
     }
 
     [Fact]
