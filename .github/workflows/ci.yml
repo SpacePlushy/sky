@@ -86,27 +86,35 @@ jobs:
       - name: Build
         run: docker compose build
 
-      # Scan the whole image filesystem from outside, with no permission checks, and require
-      # grep's "not found" status exactly: 0 (found) and 2 (an error) both fail.
+      # Scan the whole image filesystem from outside, with no permission checks. The export must
+      # succeed and grep must report "not found" (1) exactly: found (0), a grep error (2), or a
+      # failed export all fail the step. Each status is read separately, since the runner's
+      # bash -e -o pipefail would otherwise stop at grep's 1 or let it mask the export's status.
       - name: The image holds no private files
         shell: bash
         run: |
-          set -uo pipefail
           cid=$(docker create sky-over-phoenix:local)
-          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f; rc=$?
+          set +e
+          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f
+          status=("${PIPESTATUS[@]}")
+          set -e
           docker rm "$cid" >/dev/null
-          test "$rc" -eq 1
+          echo "docker export exited ${status[0]}; grep exited ${status[1]} (1 means not found)"
+          test "${status[0]}" -eq 0 && test "${status[1]}" -eq 1
 
       # The build stages too: the web stage copies web/ and Vite would load a .env.local there.
       - name: The build stages hold no private files
         shell: bash
         run: |
-          set -uo pipefail
           docker build --target web -t sky-web-stage .
           cid=$(docker create sky-web-stage)
-          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f; rc=$?
+          set +e
+          docker export "$cid" | grep -aq PRIVATE-SENTINEL-7c1f
+          status=("${PIPESTATUS[@]}")
+          set -e
           docker rm "$cid" >/dev/null
-          test "$rc" -eq 1
+          echo "docker export exited ${status[0]}; grep exited ${status[1]} (1 means not found)"
+          test "${status[0]}" -eq 0 && test "${status[1]}" -eq 1
 
       - name: Run offline and check the API and the page
         run: |
