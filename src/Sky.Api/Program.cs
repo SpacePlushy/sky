@@ -88,6 +88,12 @@ api.MapGet("/satellites/{id:long}/track", async (long id, double? minutes, Satel
 api.MapGet("/satellites/{id:long}/passes", async (long id, int? days, double? minElevation, SatelliteService service, CancellationToken token) =>
     TypedResults.Ok(await service.PassesAsync(id, days, minElevation, token).ConfigureAwait(false)));
 
+api.MapGet("/satellites/{id:long}/passes.ics", async (long id, int? days, bool? visibleOnly, int? alarm, SatelliteService service, CancellationToken token) =>
+{
+    string calendar = await service.CalendarAsync(id, days, visibleOnly, alarm, token).ConfigureAwait(false);
+    return TypedResults.File(System.Text.Encoding.UTF8.GetBytes(calendar), "text/calendar; charset=utf-8", $"sky-{id}-passes.ics");
+});
+
 // Anything else under /api is a 404, never the dashboard's page.
 api.MapFallback(() => TypedResults.Problem(statusCode: 404, title: "Not found"));
 

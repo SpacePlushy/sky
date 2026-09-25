@@ -245,6 +245,95 @@ internal sealed class SatelliteService(SkySettings settings, GpCache cache, SkyC
             warnings);
     }
 
+    /// <summary>
+    /// The passes as an iCalendar file: one event per visible part (or per pass), each with an alarm.
+    /// </summary>
+    public async Task<string> CalendarAsync(long id, int? days, bool? visibleOnly, int? alarmMinutes, CancellationToken cancellationToken)
+    {
+        int d = days ?? 7;
+        int alarm = alarmMinutes ?? 10;
+        if (d is < 1 or > 10)
+        {
+            throw new ApiException(400, "Invalid number of days", "days must be from 1 to 10.");
+        }
+
+        if (alarm is < 0 or > 120)
+        {
+            throw new ApiException(400, "Invalid alarm", "alarm must be from 0 to 120 minutes.");
+        }
+
+        DateTimeOffset t = Millisecond(_time.GetUtcNow());
+        var (record, _) = await FindAsync(id, t, cancellationToken).ConfigureAwait(false);
+        Sgp4Propagator propagator = CreatePropagator(record);
+        string name = record.Name ?? $"NORAD {id}";
+        var events = new List<CalendarEvent>();
+        foreach (SatellitePass pass in PassFinder.Find(propagator, _observer, t, t.AddDays(d), settings.MinimumElevationDegrees).Passes)
+        {
+            var windows = Visibility.Windows(pass, propagator, _observer);
+
+            // Keyed by the satellite and the minute the pass rises, so a later export with slightly
+            // different elements updates the event rather than adding a second one.
+            string key = string.Create(CultureInfo.InvariantCulture, $"{id}-{pass.Rise.Time.UtcDateTime:yyyyMMdd'T'HHmm}");
+            string details = string.Join("\n", [
+                $"Rises {Describe(pass.Rise)}",
+                $"Peak {Describe(pass.Culmination)}",
+                $"Sets {Describe(pass.Set)}",
+                $"Observer: {settings.ObserverName}",
+                "Visible means sunlit, with the Sun below -6° at the observer.",
+            ]);
+            if (visibleOnly ?? true)
+            {
+                for (int k = 0; k < windows.Count; k++)
+                {
+                    VisibleWindow w = windows[k];
+                    events.Add(new CalendarEvent(
+                        w.Start.Time,
+                        w.End.Time,
+                        string.Create(CultureInfo.InvariantCulture, $"{name} visible, up to {w.Highest.ElevationDegrees:F0}°"),
+                        $"Visible from {Describe(w.Start)} to {Describe(w.End)}, {Ending(w.EndsBecause)}.\n{details}",
+                        $"{key}-v{k}"));
+                }
+            }
+            else
+            {
+                events.Add(new CalendarEvent(
+                    pass.Rise.Time,
+                    pass.Set.Time,
+                    string.Create(CultureInfo.InvariantCulture, $"{name} pass, up to {pass.Culmination.ElevationDegrees:F0}°{(windows.Count > 0 ? ", visible" : string.Empty)}"),
+                    details,
+                    key));
+            }
+        }
+
+        return Calendar.Write($"{name} passes over {settings.ObserverName}", events, t, alarm);
+
+        string Describe(PassEvent e) => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{Local(e.Time)} at {e.ElevationDegrees:F0}° elevation, {Compass(e.AzimuthDegrees)} ({e.AzimuthDegrees:F0}°)");
+
+        string Local(DateTimeOffset instant)
+        {
+            DateTimeOffset local = TimeZoneInfo.ConvertTime(instant, settings.TimeZone);
+            TimeSpan offset = local.Offset;
+            return string.Create(CultureInfo.InvariantCulture, $"{local:yyyy-MM-dd HH:mm:ss} UTC{(offset < TimeSpan.Zero ? "-" : "+")}{offset.Duration():hh\\:mm}");
+        }
+    }
+
+    /// <summary>A 16-point compass direction for an azimuth.</summary>
+    internal static string Compass(double azimuthDegrees)
+    {
+        string[] points = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+        int index = (int)Math.Floor((((azimuthDegrees % 360.0) + 360.0) % 360.0 / 22.5) + 0.5) % 16;
+        return points[index];
+    }
+
+    private static string Ending(VisibilityChange change) => change switch
+    {
+        VisibilityChange.EntersShadow => "when it enters the Earth's shadow",
+        VisibilityChange.SkyBrightens => "when the sky brightens",
+        _ => "when it sets",
+    };
+
     public async Task<HealthResponse> HealthAsync(CancellationToken cancellationToken)
     {
         var groups = await GroupsAsync(cancellationToken).ConfigureAwait(false);
